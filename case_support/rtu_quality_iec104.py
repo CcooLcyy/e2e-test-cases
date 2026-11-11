@@ -91,14 +91,36 @@ class RtuQualityIec104:
         return self.port
 
     def _choose(self, placeholder, query, text):
-        control = (By.XPATH, self.IMPORT_DIALOG + "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][.//*[contains(@class,'ant-select-selection-placeholder') and normalize-space(.)="
-                   + xpath_text(placeholder) + "]]")
-        selector = (By.XPATH, control[1] + "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-selector ')]")
+        control_path = (
+            self.IMPORT_DIALOG
+            + "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')"
+              " and not(contains(@class,'ant-select-disabled'))]"
+              "[.//*[(contains(@class,'ant-select-placeholder') or contains(@class,'ant-select-selection-placeholder'))"
+              " and normalize-space(.)=" + xpath_text(placeholder) + "]]"
+        )
+        selector = (By.XPATH, control_path
+                    + "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-content ')"
+                      " or contains(concat(' ',normalize-space(@class),' '),' ant-select-selector ')]")
         self.upper._click(selector, f"打开{placeholder}")
+
+        def opened_list(_):
+            control = self.upper._visible((By.XPATH, control_path))
+            if control is None:
+                return None
+            field = control.find_element(By.CSS_SELECTOR, "[role='combobox']")
+            list_id = field.get_attribute("aria-controls")
+            if field.get_attribute("aria-expanded") == "true" and list_id:
+                return field, list_id
+
+        field, list_id = self.upper._until(opened_list, f"{placeholder}下拉框未打开")
         if query:
-            self.upper._visible(control).find_element(By.CSS_SELECTOR, "input").send_keys(query)
-        choice = (By.XPATH, "//div[contains(@class,'ant-select-dropdown') and not(contains(@class,'ant-select-dropdown-hidden'))]"
-                  "//div[contains(@class,'ant-select-item-option-content') and normalize-space(.)=" + xpath_text(text) + "]")
+            field.send_keys(query)
+        # 虚拟列表的 ARIA 节点与可点击选项同属一个下拉弹层。
+        choice = (By.XPATH, "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-dropdown ')"
+                  " and not(contains(@class,'ant-select-dropdown-hidden'))][.//*[@id=" + xpath_text(list_id) + "]]"
+                  "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-item-option ')"
+                  " and not(contains(@class,'ant-select-item-option-disabled')) and not(@aria-disabled='true')]"
+                  "[.//div[contains(@class,'ant-select-item-option-content') and normalize-space(.)=" + xpath_text(text) + "]]")
         self.upper._click(choice, f"选择{text}")
 
     def import_point(self, connection, tag, destination):
