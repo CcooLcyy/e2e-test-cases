@@ -6,6 +6,7 @@ from testbench.case_plan import (
     DESKTOP_FINISH, DESKTOP_START, LOGIN_CLEANUP, LOGIN_GUARD, LOGIN_PREPARE,
     Step, case_plan, desktop_action, run_case_plan,
 )
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import (
     fill_steps, form_steps, login_steps, logout_steps, option_check_steps, option_steps,
     password_check, reopen, submit_steps, username_step, wait_until_password_is_empty, workspace_steps,
@@ -32,8 +33,13 @@ def capture(id, description, expected, actual):
             "保留原账号，密码为空；记住密码和自动登录均未勾选，等待手动登录",
             "已验证账号保留、密码为空、两项均未勾选，且仍需手动登录"),
 )
+@execution_logic("""
+1. 用专用测试账号和正确密码登录独立副本。提交前确认「记住密码」和「下次自动登录」均未勾选，提交后核对工作台显示账号信息和退出入口。
+2. 正常关闭上位机并等原进程退出，重开同一测试副本，保留应用和 WebView2 数据。等待登录表单初始化及账号、密码和选项同步。
+3. 核对原账号仍在、密码框为空且保持掩码类型，两项选项均未勾选。持续确认页面等待手动登录，保存登录表单截图。
+""")
 def test_no_remember_requires_password_after_reopen(login_memory, request):
-    """不记住密码时重开上位机仍需输入密码。"""
+    """不记密码时重开需输密码"""
     run_case_plan(request, login_memory)
 
 
@@ -52,8 +58,13 @@ def test_no_remember_requires_password_after_reopen(login_memory, request):
             "点击登录后进入原账号工作台",
             "已验证工作台可见、退出入口可见，且登录账号与重开前一致"),
 )
+@execution_logic("""
+1. 用专用测试账号和正确密码登录独立副本，只勾选「记住密码」，记录工作台显示的账号。
+2. 正常关闭并重开同一副本，保留应用和 WebView2 数据。等待登录表单同步，核对原账号和密码已回填、密码保持掩码、仅「记住密码」勾选，登录页持续等待手动操作。保存表单截图。
+3. 直接使用回填内容点击登录，确认进入工作台、退出入口可见，且账号与重开前一致。保存工作台截图。
+""")
 def test_remember_password_requires_manual_login_after_reopen(login_memory, request):
-    """仅记住密码时重开回填密码，手动点击后登录成功。"""
+    """仅记住密码时重开需点登录"""
     run_case_plan(request, login_memory)
 
 
@@ -69,8 +80,13 @@ def test_remember_password_requires_manual_login_after_reopen(login_memory, requ
     *logout_steps("logout"),
     *form_steps("logout_form", remember=True, auto=True, filled=True),
 )
+@execution_logic("""
+1. 用专用测试账号和正确密码登录独立副本，勾选「下次自动登录」，确认「记住密码」联动勾选，并记录工作台显示的账号。
+2. 正常关闭并重开同一副本，保留应用和 WebView2 数据。重开后直接等待工作台，确认无需输入或点击登录即可进入，退出入口可见且账号一致。保存工作台截图。
+3. 主动退出并确认，等待表单同步，核对原账号和掩码密码已回填、两项选项均保持勾选，页面持续停留在登录页。
+""")
 def test_auto_login_enters_same_account_after_reopen(login_memory, request):
-    """下次自动登录在重开上位机后自动进入原账号工作台。"""
+    """重开自动登录原账号"""
     run_case_plan(request, login_memory)
 
 
@@ -90,8 +106,13 @@ def test_auto_login_enters_same_account_after_reopen(login_memory, request):
             "仍回填原账号和掩码密码，记住密码已勾选、自动登录未勾选",
             "已验证账号和密码回填、密码保持掩码、记住密码已勾选，且等待手动登录"),
 )
+@execution_logic("""
+1. 在独立副本的登录页填入专用测试账号和正确密码，确认两项选项均未勾选。勾选「下次自动登录」，核对「记住密码」随之勾选。
+2. 单独取消「下次自动登录」，确认「记住密码」仍勾选，然后点击登录并确认进入工作台。
+3. 正常关闭并重开同一副本。等待表单同步，核对原账号和掩码密码已回填，仍仅勾选「记住密码」，页面持续等待手动登录。保存截图。
+""")
 def test_auto_login_and_remember_password_checkbox_linkage(login_memory, request):
-    """自动登录会勾选记住密码，单独取消自动登录仍记住密码。"""
+    """自动登录与记住密码联动"""
     run_case_plan(request, login_memory)
 
 
@@ -112,8 +133,13 @@ def test_auto_login_and_remember_password_checkbox_linkage(login_memory, request
             "保留原账号，密码为空，记住密码和自动登录均未勾选",
             "取消记住密码后未重新登录，重开后已验证密码为空、两项均未勾选，并等待手动登录"),
 )
+@execution_logic("""
+1. 在独立副本中仅勾选「记住密码」，用正确账号密码登录。正常关闭并重开同一副本，确认账号和掩码密码已回填，页面等待手动登录。
+2. 勾选「下次自动登录」，确认两项均勾选。取消「记住密码」，核对两项立即取消勾选且密码框清空。
+3. 保持登录页，直接关闭并重开同一副本。等待表单同步，确认原账号保留、密码仍为空且使用掩码类型、两项均未勾选，页面持续等待手动登录。保存截图。
+""")
 def test_forget_password_clears_saved_password_and_auto_login(login_memory, request):
-    """取消记住密码后清空密码并关闭自动登录，重开后密码仍为空。"""
+    """取消记住密码后清空密码"""
     run_case_plan(request, login_memory)
 
 
@@ -132,8 +158,13 @@ def test_forget_password_clears_saved_password_and_auto_login(login_memory, requ
             "重开后无需填表或点击登录，自动进入原账号工作台",
             "重开后未操作登录表单，已验证工作台及退出入口可见，账号与退出前一致"),
 )
+@execution_logic("""
+1. 在独立副本中勾选「下次自动登录」，确认「记住密码」联动勾选，用正确账号密码登录并记录工作台账号。
+2. 在工作台主动退出并确认，等待登录表单同步。核对原账号和掩码密码已回填、两项选项仍勾选，页面持续停留在登录页。保存截图。
+3. 正常关闭并重开同一副本，不操作登录表单，直接等待工作台。核对退出入口可见、账号与退出前一致，保存工作台截图。
+""")
 def test_explicit_logout_preserves_auto_login_after_reopen(login_memory, request):
-    """主动退出后保留自动登录，重开上位机仍自动进入原账号工作台。"""
+    """主动退出后重开仍自动登录"""
     run_case_plan(request, login_memory)
 
 
@@ -160,6 +191,11 @@ def alternate_username(context):
             "恢复原账号后回填原密码，保持掩码显示，等待手动登录",
             "已验证原账号和密码回填、密码保持掩码及登录选项，页面仍等待手动登录"),
 )
+@execution_logic("""
+1. 在独立副本中仅勾选「记住密码」，用正确账号密码登录。正常关闭并重开同一副本，确认原账号和掩码密码已回填，页面等待手动登录。
+2. 将账号输入框改为另一账号，等待账号变更和密码清空，核对原密码已从表单清除，保存截图。
+3. 切回原测试账号，等待表单同步，核对原密码重新回填并保持掩码、仅勾选「记住密码」，页面持续等待手动登录。保存截图。
+""")
 def test_changing_account_does_not_reuse_saved_password(login_memory, request):
-    """修改已记住密码的账号时密码清空，切回原账号才能回填。"""
+    """切换账号时按账号回填密码"""
     run_case_plan(request, login_memory)

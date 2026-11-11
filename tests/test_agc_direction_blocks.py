@@ -3,6 +3,7 @@
 import pytest
 
 from case_support.blocked_control import SITE_CONNECTION_FLOW, report_blocked_control_case
+from case_support.case_metadata import execution_logic
 
 
 pytestmark = pytest.mark.case_group("AGC 控制")
@@ -31,26 +32,50 @@ def _agc_flow(prepare_kw, initial, target_kw, feedback, *, measured=False):
 
 
 @_agc_flow(50, "增、减闭锁均为否且品质有效", 100, "新收到有效增闭锁置位，减闭锁保持为否且品质有效")
+@execution_logic("""
+    1. 当前运行只报告前置阻塞。测试入口尚无法定位专用 AGC 组及 IEC104 路由，也缺少主站可连接的地址和点位映射。下列业务步骤待验证。
+    2. 登录 DSP 上位机并连接现场。计划确认专用单成员 AGC 组运行且投入，允许远方绝对值有功控制，上下限为 100 和 10 kW，并核对 IEC104 公共地址、总目标遥调和闭锁遥信点位。
+    3. 连接独立模拟 104 主站并总召，读取有效初值。遥调 50 kW，确认增、减闭锁均为否且品质有效。
+    4. 记录接收基线，遥调 100 kW。要求短浮点直接执行收到肯定确认和终止，同一会话新收到品质有效的增闭锁置位遥信，减闭锁保持为否且品质有效。
+""")
 def test_agc_upper_limit_sets_increase_block(request):
-    """AGC 下发设定到上限时增闭锁置位，104 主站收到有效的新遥信。"""
+    """上限设定触发增闭锁"""
     report_blocked_control_case(request, required=_REQUIRED)
 
 
 @_agc_flow(100, "增闭锁已置位且品质有效", 50, "新收到有效增闭锁解除，减闭锁保持为否且品质有效")
+@execution_logic("""
+    1. 当前运行只报告前置阻塞。测试入口尚无法定位专用 AGC 组及 IEC104 路由，也缺少主站可连接的地址和点位映射。下列业务步骤待验证。
+    2. 登录 DSP 上位机并连接现场。计划确认专用单成员 AGC 组运行且投入，允许远方绝对值有功控制，上下限为 100 和 10 kW，并核对 IEC104 公共地址、总目标遥调和闭锁遥信点位。
+    3. 连接独立模拟 104 主站并总召，读取有效初值。遥调至 100 kW 上限，确认增闭锁已置位且品质有效。
+    4. 记录接收基线，遥调至区间内的 50 kW。要求短浮点直接执行收到肯定确认和终止，同一会话收到有效的增闭锁解除变位，减闭锁保持为否且品质有效。
+""")
 def test_agc_lower_target_clears_increase_block(request):
-    """AGC 从上限下调至区间内部后增闭锁解除，104 主站收到新变位。"""
+    """从上限下调解除增闭锁"""
     report_blocked_control_case(request, required=_REQUIRED)
 
 
 @_agc_flow(50, "增、减闭锁均为否且品质有效", 10, "新收到有效减闭锁置位，增闭锁保持为否且品质有效")
+@execution_logic("""
+    1. 当前运行只报告前置阻塞。测试入口尚无法定位专用 AGC 组及 IEC104 路由，也缺少主站可连接的地址和点位映射。下列业务步骤待验证。
+    2. 登录 DSP 上位机并连接现场。计划确认专用单成员 AGC 组运行且投入，允许远方绝对值有功控制，上下限为 100 和 10 kW，并核对 IEC104 公共地址、总目标遥调和闭锁遥信点位。
+    3. 连接独立模拟 104 主站并总召，读取有效初值。遥调 50 kW，确认增、减闭锁均为否且品质有效。
+    4. 记录接收基线，遥调 10 kW。要求短浮点直接执行收到肯定确认和终止，同一会话新收到品质有效的减闭锁置位遥信，增闭锁保持为否且品质有效。
+""")
 def test_agc_lower_limit_sets_decrease_block(request):
-    """AGC 下发设定到下限时减闭锁置位，104 主站收到有效的新遥信。"""
+    """下限设定触发减闭锁"""
     report_blocked_control_case(request, required=_REQUIRED)
 
 
 @_agc_flow(10, "减闭锁已置位且品质有效", 50, "新收到有效减闭锁解除，增闭锁保持为否且品质有效")
+@execution_logic("""
+    1. 当前运行只报告前置阻塞。测试入口尚无法定位专用 AGC 组及 IEC104 路由，也缺少主站可连接的地址和点位映射。下列业务步骤待验证。
+    2. 登录 DSP 上位机并连接现场。计划确认专用单成员 AGC 组运行且投入，允许远方绝对值有功控制，上下限为 100 和 10 kW，并核对 IEC104 公共地址、总目标遥调和闭锁遥信点位。
+    3. 连接独立模拟 104 主站并总召，读取有效初值。遥调至 10 kW 下限，确认减闭锁已置位且品质有效。
+    4. 记录接收基线，遥调至区间内的 50 kW。要求短浮点直接执行收到肯定确认和终止，同一会话收到有效的减闭锁解除变位，增闭锁保持为否且品质有效。
+""")
 def test_agc_higher_target_clears_decrease_block(request):
-    """AGC 从下限上调至区间内部后减闭锁解除，104 主站收到新变位。"""
+    """从下限上调解除减闭锁"""
     report_blocked_control_case(request, required=_REQUIRED)
 
 
@@ -59,6 +84,12 @@ def test_agc_higher_target_clears_decrease_block(request):
     "同一轮观察中，新收到有效增闭锁置位和低于 100 kW 的新有效实测，减闭锁为否且品质有效",
     measured=True,
 )
+@execution_logic("""
+    1. 当前运行只报告前置阻塞。测试入口尚无法定位专用 AGC 组及 IEC104 路由，也缺少主站可连接的地址和点位映射。下列业务步骤待验证。
+    2. 登录 DSP 上位机并连接现场。计划确认专用单成员 AGC 组运行且投入，允许远方绝对值有功控制，上下限为 100 和 10 kW，并核对 IEC104 公共地址、总目标遥调、闭锁遥信和实测功率遥测点位。
+    3. 连接独立模拟 104 主站并总召，读取有效遥信和遥测初值。遥调 50 kW，确认有效实测功率大于 10 kW 且小于 100 kW。
+    4. 记录接收基线，遥调 100 kW，要求短浮点直接执行收到肯定确认和终止。同一会话的同一轮观察中，应新收到品质有效的增闭锁置位遥信和低于 100 kW 的有效实测，减闭锁为否且品质有效。
+""")
 def test_agc_increase_block_does_not_wait_for_measured_limit(request):
-    """实测仍低于上限时，AGC 按已下发上限设定置增闭锁并上送 104 遥信。"""
+    """设定达上限且实测未达时增闭锁"""
     report_blocked_control_case(request, required=_REQUIRED)

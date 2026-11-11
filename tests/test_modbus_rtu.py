@@ -16,6 +16,7 @@ from testbench.case_plan import (
     run_case_plan, run_steps, track_fixture_context, track_fixture_step,
 )
 from testbench.login_page import PlatformLoginPage, load_login_account
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import login_steps
 from testbench.modbus_rtu_config import assert_dual_observation, expected_value
 from testbench.modbus_environment import BASIC_CASE_IDS, validate_selected_modbus_cases
@@ -437,34 +438,64 @@ TWO_STATIONS = (
          lambda context: context.upper.assert_saved_configuration()),
     CONFIGURATION_CLEANUP, DESKTOP_FINISH,
 )
+@execution_logic("""
+1. 在独立副本中登录并连接现场下位机。新建专用 RTU 连接，配置本地串口、19200 波特率、8E1、站号 7、零基地址、750 ms 轮询和 1000 ms 读取超时，保存并记录连接编号。
+2. 新增并保存地址 16 的 0x03 UINT16 采集点，设置单寄存器、AB 字节序、倍率 0.1、偏移 2、死区 0.5。
+3. 正常关闭并重开同一副本，重新登录和连接同一下位机。从上位机重新打开该连接和点位的编辑界面，逐项核对回读配置与保存值一致。
+4. 删除本例连接及点表，并确认连接从列表消失。
+""")
 def test_rtu_configuration_saved_on_both_pages(request, configuration_rtu):
-    """Modbus RTU 连接与点表保存后，重启上位机并重新登录可回读一致。"""
+    """重开后回读 RTU 连接与点表"""
     run_case_plan(request, configuration_rtu)
 
 
 @pytest.mark.requires_modbus
 @rtu_plan(*INITIAL_ACQUISITION)
+@execution_logic("""
+1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建单站总线及手动寄存器，读回实际串口、站号和地址。
+2. 将模拟器寄存器置为 1234 并确认生效。用实测参数创建 RTU 连接和 0x03 UINT16 点，设置倍率 1、偏移 0，启动轮询并打开运行视图。
+3. 在采集时限内核对模拟器原始值和上位机实时值均为 1234，且上位机质量正常、采集时间有效、地址和功能码与配置一致。
+4. 保存双端观察和上位机截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
+""")
 def test_rtu_initial_acquisition_matches_simulator(request, independent_rtu):
-    """RTU初始采集值与slaveSim已生效原始值一致。"""
+    """RTU 首次采集匹配模拟值"""
     run_observations(request, INITIAL_ACQUISITION, independent_rtu)
 
 
 @pytest.mark.requires_modbus
 @rtu_plan(*SOURCE_CHANGE)
+@execution_logic("""
+1. 登录上位机并连接现场下位机。用 slaveSim 重建单站总线，将手动寄存器置为 1234 并确认生效。按实际串口、站号和地址配置 0x03 UINT16 点，倍率为 1、偏移为 0，启动轮询。
+2. 在采集时限内核对模拟器和上位机均为 1234，且上位机质量正常、地址和功能码正确，记录有效的采集时间。
+3. 在 slaveSim 将同一寄存器改为 2345 并回读确认。保持轮询，在时限内核对上位机实时值为 2345、质量仍正常、采集时间有效且与前次不同。
+4. 保存两轮双端对照和截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
+""")
 def test_rtu_source_change_updates_value_and_time(request, independent_rtu):
-    """slaveSim数值变化后RTU实时值与采集时间同步更新。"""
+    """RTU 源值变化刷新值和时间"""
     run_observations(request, SOURCE_CHANGE, independent_rtu)
 
 
 @pytest.mark.requires_modbus
 @rtu_plan(*SCALED_CHANGE)
+@execution_logic("""
+1. 登录上位机并连接现场下位机。用 slaveSim 重建单站总线，将手动寄存器置为 1234 并确认生效，读回实际串口、站号和地址。
+2. 按实际参数新建 RTU 连接和 0x03 UINT16 点，设置倍率 0.1、偏移 2，启动轮询。在时限内核对模拟器为 1234、上位机工程量为 125.4，并记录采集时间。
+3. 将同一寄存器改为 2345 并确认生效，在时限内核对上位机工程量更新为 236.5，采集时间与前次不同。两轮均核对质量正常、采集时间有效、地址和功能码正确。
+4. 保存两轮原始值和工程量对照及截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
+""")
 def test_rtu_scale_and_offset_match_fixed_expectations(request, independent_rtu):
-    """RTU倍率0.1偏移2将两组原始值换算为125.4和236.5。"""
+    """RTU 倍率与偏移换算"""
     run_observations(request, SCALED_CHANGE, independent_rtu)
 
 
 @pytest.mark.requires_modbus
 @rtu_plan(*TWO_STATIONS)
+@execution_logic("""
+1. 登录上位机并连接现场下位机。用 slaveSim 重建一条总线和两个从站，将两站手动寄存器分别置为 1234、4321 并确认生效。
+2. 在上位机用同一实际串口、不同站号分别创建连接和 0x03 UINT16 点，倍率为 1、偏移为 0，启动两站轮询。在时限内逐站核对双端值，并记录两站的采集时间。
+3. 只把第一站改为 2345。在时限内确认第一站采集到 2345，第二站采集时间已刷新且仍为 4321。两轮均逐站核对模拟器原始值、上位机质量、采集时间、地址和功能码。
+4. 保存各站两轮的双端对照和截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
+""")
 def test_rtu_two_stations_do_not_cross_values(request, two_station_rtu):
-    """同一RTU总线两站数值独立，改变第一站不改变第二站。"""
+    """同一 RTU 总线两站不串值"""
     run_observations(request, TWO_STATIONS, two_station_rtu)

@@ -9,6 +9,7 @@ from testbench.case_plan import (
     DESKTOP_FINISH, DESKTOP_START, Step, case_plan, desktop_action, desktop_check, run_case_plan,
 )
 from testbench.login_page import PlatformLoginPage
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import password_check, ready_steps, submit_steps
 
 pytestmark = pytest.mark.case_group("基础登录")
@@ -56,6 +57,11 @@ def _capture_validation(context):
                   targets=PAGE.target(PAGE.SCREEN, "检查仍停留在登录页")),
     DESKTOP_FINISH,
 )
+@execution_logic("""
+1. 启动独立的 DSP 上位机副本，等待登录表单就绪，核对账号和密码初始均为空。
+2. 保持两个输入框为空，点击登录，等待两个字段的必填提示同时出现。
+3. 逐项核对「请输入平台账号」和「请输入密码」，保存提示截图，并确认登录页仍然可见。
+""")
 def test_empty_login_reports_required_fields(request, fresh_desktop):
-    """空账号密码登录时明确提示必填项。"""
+    """空账号和密码提示必填"""
     run_case_plan(request, SimpleNamespace(desktop=fresh_desktop, page=PAGE(fresh_desktop)))

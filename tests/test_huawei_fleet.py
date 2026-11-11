@@ -13,6 +13,7 @@ from testbench.case_plan import (
     ContinueAfterFailure, DESKTOP_FINISH, DESKTOP_START, SITE_CONNECT, SLAVESIM_BROWSER_READY, Step, case_plan,
     run_steps, track_fixture_context, track_fixture_step,
 )
+from case_support.case_metadata import execution_logic
 from case_support.huawei_fleet_run import DEVICE_EXPECTED, STAGES, HuaweiFleetRun, device_step_title
 from case_support.huawei_rtu_page import HuaweiRtuPage
 from testbench.login_page import PlatformLoginPage, load_login_account
@@ -182,6 +183,12 @@ BUSINESS_STEPS = (
     *LOGIN_STEPS, SITE_CONNECT, OPEN_LINKS, SIMULATOR_CREATE,
     *PREPARE_STEPS, *BUSINESS_STEPS, FLEET_CLEANUP, SIMULATOR_CLEANUP, SIMULATOR_FINISH, DESKTOP_FINISH,
 )
+@execution_logic("""
+1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建六路分别含 1 至 6 台华为逆变器的模拟总线。保存并回读各路实际串口、各台站号和寄存器地址，固定每台的可用直流功率和电压，关闭扰动。
+2. 按模拟器实际串口、站号和寄存器地址，在上位机为 21 台设备各建一条 RTU 连接，配置 18 个采集点并启动轮询。
+3. 从初始发电开始，通过 slaveSim 切换有功调节、正无功、负无功、待机、限电停运和恢复发电。每台每轮先按预定工况核对源端的电压、功率、功率因数和状态等，再对照稳定的模拟器原始值与上位机的 18 个采集点。核对换算、状态位、地址、功能码和正常质量，有变化的点还需更新时间。
+4. 147 项设备工况均须在各自时限内达到预期并保存双端证据。记录逐次采样、双端截图和汇总报告，失败时保留现场。停止并删除本例连接，清空 slaveSim 总线并回读确认。
+""")
 def test_huawei_six_buses_21_devices_match(request, huawei_fleet):
-    """六路21台华为逆变器逐台核对遥测、状态及模拟器工况反馈。"""
+    """华为六路 21 台七工况采集"""
     run_steps(request, (*PREPARE_STEPS, *BUSINESS_STEPS), huawei_fleet)

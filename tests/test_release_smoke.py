@@ -8,6 +8,7 @@ from testbench.case_plan import (
     DESKTOP_FINISH, DESKTOP_START, Step, case_plan, desktop_action, desktop_check, run_case_plan,
 )
 from testbench.login_page import PlatformLoginPage
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import ready_steps
 
 pytestmark = pytest.mark.case_group("基础登录")
@@ -67,6 +68,11 @@ def _address_editable(context):
                  "已等待设置折叠，且地址输入框不可见"),
     DESKTOP_FINISH,
 )
+@execution_logic("""
+1. 启动独立的 DSP 上位机副本，等待登录表单就绪，确认「平台连接设置」入口可操作、初始折叠，平台地址输入框隐藏。
+2. 点击入口展开设置，等待展开状态和地址输入框同步，确认输入框可编辑。
+3. 再次点击入口，确认设置已折叠且地址输入框重新隐藏。保存初始、展开、折叠三种状态的截图。
+""")
 def test_release_platform_settings_expand_and_collapse(request, fresh_desktop):
-    """平台连接设置可以展开并折叠。"""
+    """平台连接设置展开与折叠"""
     run_case_plan(request, SimpleNamespace(desktop=fresh_desktop, page=PlatformLoginPage(fresh_desktop)))

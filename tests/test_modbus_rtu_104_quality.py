@@ -16,6 +16,7 @@ from testbench.case_plan import (
     Step, case_plan, run_steps, track_fixture_context, track_fixture_step,
 )
 from testbench.login_page import PlatformLoginPage, load_login_account
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import login_steps
 from case_support.modbus_rtu_page import ModbusRtuPage, xpath_text
 from testbench.model import Environment, validate_slavesim_url
@@ -362,8 +363,14 @@ def _cleanup(context, request, failure):
 @case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, OPEN_PROTOCOL, SIM_START, *PREPARE_SCENARIO,
            MASTER104_START, *INITIAL_SESSION, *OBSERVATIONS, VERIFY_FRAMES,
            UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH, MASTER104_FINISH, DESKTOP_FINISH)
+@execution_logic("""
+1. 登录上位机并连接现场下位机，清除 slaveSim 原有总线，重建参照和目标两路串口。参照站正常应答 100，目标站初始无应答。用实际串口创建两个 RTU 采集点，设置正死区，导入专用 IEC104 被控站为带时标短浮点遥测，核对两个点的 IOA 和数据总线路由，启动链路与轮询。
+2. 用独立 IEC104 主站建立会话，收到 STARTDT 确认后发起总召。核对主站点表和原始报文中参照点有效，目标点在总召响应及总召结束前的自发遥测中均缺席。
+3. 依次将目标站切为正常应答 100、无应答、异常应答 0x02、恢复应答 100。在 slaveSim 报文中确认每个工况实际生效，并在主站等待新的目标自发遥测。每轮值均为 100，品质依次为正常（0x00）、NT（0x40）、IV+NT（0xC0）、恢复正常（0x00）。
+4. 保存并复核原始报文。核对总召肯定确认和终止、目标遥测的传送类型及 CP56Time2a 时标。两种故障沿用相同时标，重复故障不刷新，恢复后时标更新。失败时保留现场和报文，随后清理本例 IEC104、RTU 和路由配置，清空 slaveSim 总线并回读确认。
+""")
 def test_rtu_quality_reaches_iec104_with_unchanged_value(request):
-    """总召省略未采到的点，值保持 100 时仍依次收到正常、NT、IV+NT 与恢复。"""
+    """RTU 值不变时 IEC104 品质上送"""
     with track_fixture_step(request, ENVIRONMENT):
         simulator_url, timeout = _check_environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):

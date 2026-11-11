@@ -13,6 +13,7 @@ from testbench.case_plan import (
     Step, case_plan, desktop_action, desktop_check, run_case_plan,
 )
 from testbench.login_page import LoginAccount, PlatformLoginPage
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import (
     configure_steps, fill_steps, login_steps, logout_steps, password_check, ready_steps, reopen, submit_steps,
 )
@@ -120,8 +121,13 @@ VERIFY_WRONG_PASSWORD = Step("wrong.error.check", "验证错误提示明确说�
     Step("wrong.capture", "保存错误密码验证截图", "记录错误提示和可重试表单", _capture_error),
     LOGIN_CLEANUP, DESKTOP_FINISH,
 )
+@execution_logic("""
+1. 在独立的 DSP 上位机副本中用专用账号和正确密码登录，确认工作台可见，再主动退出并等待登录表单就绪。
+2. 保持账号正确，生成不同于正确密码的 24 字符错误密码。关闭「记住密码」和「下次自动登录」，提交并等待认证结果。
+3. 核对提示明确表达账号或密码错误，登录页仍然可见且工作台未出现。确认登录按钮可用、账号和密码可重新编辑、密码保持掩码，并保存截图。
+""")
 def test_wrong_password_reports_explicit_credentials_error(request, login_memory):
-    """正确账号输入错误密码时明确提示认证失败并允许重新输入。"""
+    """错误密码提示明确且可重试"""
     run_case_plan(request, login_memory)
 
 
@@ -168,6 +174,11 @@ def _capture_reopened_login(case):
     Step("reopened.capture", "保存重开后的登录页截图", "记录空密码与手动登录入口", _capture_reopened_login),
     LOGIN_CLEANUP, DESKTOP_FINISH,
 )
+@execution_logic("""
+1. 用专用测试账号和正确密码登录独立副本，确认工作台可见，再主动退出。保持原账号，输入不同于正确密码的 24 字符错误密码。
+2. 勾选「记住密码」和「下次自动登录」，点击登录，核对界面明确提示账号或密码错误。
+3. 正常关闭并重开同一副本，保留应用和 WebView2 数据。等待表单就绪，持续确认登录页可操作、未出现认证错误且未自动进入工作台。核对密码为空并保存截图。
+""")
 def test_wrong_password_is_not_remembered_or_auto_used_after_reopen(request, login_memory):
-    """勾选记住密码和下次自动登录后提交错误密码，重开仍需手动输入密码。"""
+    """错误密码重开后不回填"""
     run_case_plan(request, login_memory)
