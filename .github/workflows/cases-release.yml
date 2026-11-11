@@ -115,5 +115,5 @@ jobs:
           archive=${archives[0]}
           version=${archive#release/mskdsp-testbench-cases_}
           version=${version%.zip}
-          npm exec --yes --package=@tauri-apps/cli@2.10.1 -- tauri signer sign --app-version "$version" "$archive"
+          npm exec --yes --package=@tauri-apps/cli@2.12.4 -- tauri signer sign --app-version "$version" "$archive"
           python scripts/publish_cases.py "$CASE_CHANNEL" "$archive" runner
