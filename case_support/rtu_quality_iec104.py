@@ -123,12 +123,12 @@ class RtuQualityIec104:
                   "[.//div[contains(@class,'ant-select-item-option-content') and normalize-space(.)=" + xpath_text(text) + "]]")
         self.upper._click(choice, f"选择{text}")
 
-    def import_point(self, connection, tag, destination):
+    def import_point(self, connection, tag, destination, *, module="ModbusRTU"):
         self._select_link(self.name)
         self._assert_link()
         self._button("添加点位", self.POINT_CARD, "打开 IEC104 添加点位菜单")
         self.upper._click((By.XPATH, "//*[@role='menuitem'][normalize-space(.)='从数据总线导入']"), "从数据总线导入")
-        source = f"ModbusRTU/{connection}"
+        source = f"{module}/{connection}"
         self._choose("先选择来源连接", connection, source)
         self._choose("选择一个或多个来源点位", tag, f"{source} : {tag}")
         self._choose("统一点位类型", None, "FLOAT (短浮点值)")
