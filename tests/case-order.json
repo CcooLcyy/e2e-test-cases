@@ -18,7 +18,8 @@
         "tests/test_session_preferences.py::test_auto_login_and_remember_password_checkbox_linkage",
         "tests/test_session_preferences.py::test_forget_password_clears_saved_password_and_auto_login",
         "tests/test_session_preferences.py::test_explicit_logout_disables_auto_login_but_keeps_password",
-        "tests/test_session_preferences.py::test_changing_account_does_not_reuse_saved_password"
+        "tests/test_session_preferences.py::test_changing_account_does_not_reuse_saved_password",
+        "tests/test_wrong_password.py::test_wrong_password_is_not_remembered_or_auto_used_after_reopen"
       ]
     },
     {

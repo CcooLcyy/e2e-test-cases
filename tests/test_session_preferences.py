@@ -8,7 +8,7 @@ from testbench.case_plan import (
 )
 from case_support.login_plan import (
     fill_steps, form_steps, login_steps, logout_steps, option_check_steps, option_steps,
-    password_check, submit_steps, username_step, wait_until_password_is_empty, workspace_steps,
+    password_check, reopen, submit_steps, username_step, wait_until_password_is_empty, workspace_steps,
 )
 
 pytestmark = pytest.mark.case_group("密码记忆与自动登录")
@@ -16,11 +16,6 @@ pytestmark = pytest.mark.case_group("密码记忆与自动登录")
 
 def session_plan(*steps):
     return case_plan(LOGIN_PREPARE, DESKTOP_START, LOGIN_GUARD, *steps, LOGIN_CLEANUP, DESKTOP_FINISH)
-
-
-def reopen(id):
-    return desktop_action(id, "重新打开本次测试上位机", "同一测试副本重开并保留登录数据",
-                          lambda c: c.desktop.restart())
 
 
 def capture(id, description, expected, actual):

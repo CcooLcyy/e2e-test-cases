@@ -140,6 +140,11 @@ def login_steps(prefix, remember=False, auto=False):
     )
 
 
+def reopen(id):
+    return desktop_action(id, "重新打开本次测试上位机", "同一测试副本重开并保留登录数据",
+                          lambda c: c.desktop.restart())
+
+
 def form_steps(prefix, remember, auto, filled):
     def expected_password(context):
         return context.account.password if filled else ""
