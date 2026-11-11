@@ -10,7 +10,7 @@ from testbench.case_plan import (
 from testbench.login_page import PlatformLoginPage
 from case_support.login_plan import ready_steps
 
-pytestmark = pytest.mark.case_group("启动与界面")
+pytestmark = pytest.mark.case_group("基础登录")
 HEADER = (By.CSS_SELECTOR, ".platform-login-connection .ant-collapse-header")
 ADDRESS = (By.CSS_SELECTOR, 'input[placeholder="https://platform.example:50000"]')
 

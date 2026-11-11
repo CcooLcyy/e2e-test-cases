@@ -5,12 +5,7 @@
       "cases": [
         "tests/test_login_success.py::test_valid_account_enters_workspace",
         "tests/test_login_validation.py::test_empty_login_reports_required_fields",
-        "tests/test_wrong_password.py::test_wrong_password_reports_explicit_credentials_error"
-      ]
-    },
-    {
-      "name": "启动与界面",
-      "cases": [
+        "tests/test_wrong_password.py::test_wrong_password_reports_explicit_credentials_error",
         "tests/test_release_smoke.py::test_release_platform_settings_expand_and_collapse"
       ]
     },
