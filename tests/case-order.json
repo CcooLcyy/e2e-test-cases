@@ -35,14 +35,19 @@
       ]
     },
     {
-      "name": "AGC / AVC 控制",
+      "name": "AGC 控制",
       "cases": [
         "tests/test_agc_direction_blocks.py::test_agc_upper_limit_sets_increase_block",
         "tests/test_agc_direction_blocks.py::test_agc_lower_target_clears_increase_block",
         "tests/test_agc_direction_blocks.py::test_agc_lower_limit_sets_decrease_block",
         "tests/test_agc_direction_blocks.py::test_agc_higher_target_clears_decrease_block",
         "tests/test_agc_direction_blocks.py::test_agc_increase_block_does_not_wait_for_measured_limit",
-        "tests/test_agc_rebalance.py::test_agc_redistributes_when_rtu_member_loses_communication",
+        "tests/test_agc_rebalance.py::test_agc_redistributes_when_rtu_member_loses_communication"
+      ]
+    },
+    {
+      "name": "AVC 控制",
+      "cases": [
         "tests/test_avc_control_periods.py::test_avc_voltage_deviation_recalculates_without_new_input",
         "tests/test_avc_control_periods.py::test_avc_burst_respects_command_interval_and_uses_latest_target",
         "tests/test_avc_control_periods.py::test_avc_stopped_group_applies_new_periods_after_restart"

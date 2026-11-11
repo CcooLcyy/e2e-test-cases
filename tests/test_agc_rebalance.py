@@ -4,7 +4,7 @@ import pytest
 from case_support.blocked_control import SITE_CONNECTION_FLOW, report_blocked_control_case
 
 
-pytestmark = pytest.mark.case_group("AGC / AVC 控制")
+pytestmark = pytest.mark.case_group("AGC 控制")
 
 
 @pytest.mark.case_flow(

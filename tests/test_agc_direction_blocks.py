@@ -5,7 +5,7 @@ import pytest
 from case_support.blocked_control import SITE_CONNECTION_FLOW, report_blocked_control_case
 
 
-pytestmark = pytest.mark.case_group("AGC / AVC 控制")
+pytestmark = pytest.mark.case_group("AGC 控制")
 
 _REQUIRED = "从业务界面确认本例专用 AGC 与 IEC104 映射，取得可连接协议端点和点位后由独立主站遥调及观察"
 _BLOCKED = (
