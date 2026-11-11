@@ -177,14 +177,31 @@ class ModbusRtuPage:
         with self.desktop.step(f"填写{label}", expected=str(value), cancellable=not self._cleaning):
             self._replace(self._field(name), value)
 
+    def _select_control(self, name):
+        return self._field(name).find_element(
+            By.XPATH, "ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][1]")
+
+    def _select_value(self, name):
+        return self._select_control(name).find_element(
+            By.CSS_SELECTOR, ".ant-select-content-has-value, .ant-select-selection-item").text.strip()
+
     def _select_option(self, name, label):
+        def opened_list(_):
+            field = self._field(name)
+            return field.get_attribute("aria-expanded") == "true" and field.get_attribute("aria-controls")
+
         with self.desktop.step(f"设置{name}为{label}", expected=label, cancellable=not self._cleaning):
-            # Antd 非搜索 Select 的内部 input 透明，点击可见 selector 而非透明输入框。
-            container = self._field(name).find_element(
-                By.XPATH, "ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][1]")
-            container.find_element(By.CSS_SELECTOR, ".ant-select-selector").click()
-            option = (By.XPATH, "//div[contains(@class,'ant-select-item-option') and @title=" + xpath_text(label) + "]")
-            self._until(lambda _: self._visible(option), f"未找到选项：{label}").click()
+            # Ant Design 6 使用 content，旧版使用 selector。两者都是可见的点击区域。
+            self._select_control(name).find_element(
+                By.CSS_SELECTOR, ".ant-select-content, .ant-select-selector").click()
+            list_id = self._until(opened_list, f"{name} 下拉框未打开")
+            option = (By.XPATH, "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-dropdown ')]"
+                      "[.//*[@id=" + xpath_text(list_id) + "]]"
+                      "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-item-option ')"
+                      " and not(contains(concat(' ',normalize-space(@class),' '),' ant-select-item-option-disabled '))"
+                      " and not(@aria-disabled='true') and @title=" + xpath_text(label) + "]")
+            self._until(lambda _: self._visible(option), f"{name} 未找到可选项：{label}").click()
+            self._until(lambda _: self._select_value(name) == label, f"{name} 未选中 {label}")
 
     def _submit(self, text):
         self._click(self._button(text, self.DIALOG_XPATH), f"提交{text}")
@@ -287,9 +304,7 @@ class ModbusRtuPage:
         self.desktop.check(f"保存后{field}一致", equal, True)
 
     def _assert_select(self, field, expected):
-        actual = self._field(field).find_element(By.XPATH, "ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][1]")
-        text = actual.find_element(By.CSS_SELECTOR, ".ant-select-selection-item").get_attribute("title")
-        self.desktop.check(f"保存后{field}一致", text, expected)
+        self.desktop.check(f"保存后{field}一致", self._select_value(field), expected)
 
     def assert_saved_configuration(self):
         name = self.current
