@@ -275,25 +275,27 @@ class ModbusRtuPage:
 
     def add_point(self, tag, function=3, address=0, data_type="UINT16", scale=1, offset=0, *, deadband=0):
         self._assert_identity()
-        if function not in (3, 4) or data_type != "UINT16":
-            raise ValueError("首批RTU采集用例仅支持0x03/0x04 UINT16")
-        self._click(self._button("添加点位", "//div[contains(@class,'protocol-point-card')]"), "新增 RTU 采集点")
+        functions = {3: "0x03 读保持寄存器", 4: "0x04 读输入寄存器", 6: "0x06 写单寄存器"}
+        if function not in functions or data_type != "UINT16":
+            raise ValueError("RTU 测试点仅支持 0x03/0x04/0x06 UINT16")
+        self._click(self._button("添加点位", "//div[contains(@class,'protocol-point-card')]"), "新增 RTU 点位")
         self._fill("tag", tag, "Tag")
-        function_label = "0x03 读保持寄存器" if function == 3 else "0x04 读输入寄存器"
+        function_label = functions[function]
         self._select_option("function", function_label)
         self._fill("address", address, "点位地址")
         self._select_option("data_type", data_type)
         self._select_option("reg_count", "1 个寄存器")
         self._fill("scale", scale, "缩放系数")
         self._fill("offset", offset, "偏移量")
-        self._fill("deadband", deadband, "死区")
+        if function != 6:
+            self._fill("deadband", deadband, "死区")
         self._select_option("byte_order", "AB")
         self._submit("添加点位")
         edit = (By.CSS_SELECTOR, f'button[aria-label="编辑点位 {tag}"]')
-        self._until(lambda _: self._visible(edit), f"保存后点表未显示采集点 {tag}")
+        self._until(lambda _: self._visible(edit), f"保存后点表未显示 RTU 点 {tag}")
         self.owned[self.current]["points"][tag] = {"tag": tag, "function": function_label, "address": address,
                                                      "data_type": data_type, "scale": scale, "offset": offset,
-                                                     "deadband": deadband}
+                                                     "deadband": None if function == 6 else deadband}
 
     def _assert_input(self, field, expected):
         actual = self._field(field).get_attribute("value")
@@ -320,7 +322,8 @@ class ModbusRtuPage:
         for tag, expected in self.owned[name]["points"].items():
             self._click((By.CSS_SELECTOR, f'button[aria-label="编辑点位 {tag}"]'), f"重新读取点位 {tag}")
             for field in ("tag", "address", "scale", "offset", "deadband"):
-                self._assert_input(field, expected[field])
+                if expected[field] is not None:
+                    self._assert_input(field, expected[field])
             for field in ("function", "data_type"):
                 self._assert_select(field, expected[field])
             self._assert_select("reg_count", "1 个寄存器")

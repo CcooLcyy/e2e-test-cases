@@ -122,7 +122,7 @@ class AgcDirectionScenario:
             error.add_note(message)
             LOGGER.exception("AGC失败观察记录保存异常，保留原始错误")
 
-    def _apply(self, target, *, fresh_key=None, stage, require_lag=False):
+    def _apply(self, target, *, fresh_key=None, stage, require_lag=False, after_send=None):
         expected = self.profile.expected(target)
         row = {"阶段": stage, "固定目标kW": str(target), "固定闭锁期望": expected,
                "配置": self.profile.to_dict()}
@@ -141,6 +141,8 @@ class AgcDirectionScenario:
                 row["发送结果"] = self.sender.send_target_kw(target)
                 # 使用主站实际发送时刻划定本轮接收边界。
                 baseline["wall_time"] = row["发送结果"]["sent_at"]
+            if after_send is not None:
+                after_send()
             title = "核对本轮闭锁变位及实测未到上限" if require_lag else "核对主站闭锁值、品质与本轮变位"
             with self.master.step(title, expected=expected):
                 changed = (fresh_key,) if fresh_key else tuple(
@@ -162,6 +164,29 @@ class AgcDirectionScenario:
             self._preserve_failure(error, row)
             raise
 
+    def initialize_target(self, target):
+        """新建组的闭锁初值未知，先经正常业务命令建立可总召的初态。"""
+        self.master.verify_target(self.profile.master_host, self.profile.master_port, self.profile.common_address)
+        result = self.sender.send_target_kw(target)
+        self.master.metadata["AGC 初始设定遥调"] = result
+
+    def verify_initial_state(self, target, *, require_lag=False):
+        initial = self.observer.checkpoint(include_measurement=require_lag)
+        actual = {key: point["value"] for key, point in initial["points"].items()}
+        expected = self.profile.expected(target)
+        assert actual == expected, f"准备阶段闭锁状态不符：预期 {expected}，实际 {actual}"
+        if require_lag:
+            measured_kw = Decimal(initial["measurement"]["value_kw"])
+            assert self.profile.lower_kw < measured_kw < self.profile.upper_kw, (
+                f"初态实测功率须严格位于区间内，实际 {measured_kw} kW")
+        self.master.metadata["AGC 总召初态"] = initial
+
+    def verify_transition(self, target, changed_key, *, require_lag=False, after_send=None):
+        if changed_key not in self.profile.ioas:
+            raise ValueError("AGC验收必须明确增闭锁或减闭锁变位点")
+        return self._apply(target, fresh_key=changed_key, stage="业务验收", require_lag=require_lag,
+                           after_send=after_send)
+
     def run_case(self, prepare, target, changed_key, *, require_lag=False):
         if changed_key not in self.profile.ioas:
             raise ValueError("AGC验收必须明确增闭锁或减闭锁变位点")
@@ -169,4 +194,4 @@ class AgcDirectionScenario:
             with self.master.step("核对总召后实测功率点可用"):
                 self.observer.checkpoint(include_measurement=True)
         self._apply(prepare, stage="独立准备")
-        return self._apply(target, fresh_key=changed_key, stage="业务验收", require_lag=require_lag)
+        return self.verify_transition(target, changed_key, require_lag=require_lag)
