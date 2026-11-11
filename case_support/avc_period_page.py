@@ -150,7 +150,8 @@ class AvcPeriodPage(ModbusRtuPage):
 
     def create_group(self, group_name, *, mode, calculation_period, command_period, voltage_tag,
                      target_tag, rtu_connection, q_measurement_tag, q_setpoint_tag, kp=2,
-                     member_name="inverter", q_min=0, q_max=100, rtu_target_tag=None):
+                     member_name="inverter", q_min=0, q_max=100, rtu_target_tag=None,
+                     voltage_connection=None, configure_expiry=None):
         self._open_groups()
         self._refresh_groups()
         self.group_name = group_name
@@ -173,8 +174,11 @@ class AvcPeriodPage(ModbusRtuPage):
         else:
             self._fill_field(GROUP, "q_total_cmd_signal_tag", target_tag)
             self._choose(GROUP, "id", "q_total_cmd_mode", "绝对值")
-        self._choose(GROUP, "aria-label", "电压量测数据来源", f"ModbusRTU / {rtu_connection} / {voltage_tag}",
+        voltage_source = voltage_connection or rtu_connection
+        self._choose(GROUP, "aria-label", "电压量测数据来源", f"ModbusRTU / {voltage_source} / {voltage_tag}",
                      search=voltage_tag, multiple=True)
+        if configure_expiry is not None:
+            configure_expiry(self, GROUP)
         if rtu_target_tag is not None:
             self._choose(GROUP, "aria-label", "总无功命令数据来源", f"ModbusRTU / {rtu_connection} / {rtu_target_tag}",
                          search=rtu_target_tag, multiple=True)
@@ -194,6 +198,12 @@ class AvcPeriodPage(ModbusRtuPage):
         self.conn_id = self._item_identity(item)
         self._select_owned()
         self._check_route_save()
+        if configure_expiry is not None:
+            self._click(self._button("编辑", SUMMARY), "重新打开 AVC 控制组读回量测有效期")
+            self.group_draft_opened = True
+            configure_expiry(self, GROUP, verify=True)
+            self._discard_draft(GROUP, "取消")
+            self.group_draft_opened = False
         self.desktop.metadata["本例 AVC 控制组"] = {
             "组名": group_name, "连接编号": self.conn_id, "电压量测": voltage_tag,
             "目标命令": target_tag, "成员": member_name, "无功量测": q_measurement_tag,
