@@ -10,13 +10,23 @@ class RtuQualitySimulator(SlaveSimPage):
     def __init__(self, desktop, url, name, *, browser=None):
         super().__init__(desktop, url, browser=browser)
         self.names = {role: f"{name}-{role}" for role in ("reference", "target")}
-        self.paths = {}
+        self.link_paths = {}
+        self.actual_devices = {}
 
     def _check_owned_paths(self, buses):
         for bus in buses:
-            if bus["name"] in self.paths and bus["link"] != self.paths[bus["name"]]:
+            if bus["name"] in self.link_paths and bus["link"] != self.link_paths[bus["name"]]:
                 raise AssertionError("本例模拟总线的路径已变化，停止配置")
-        self._assert_save_safe(buses, self.paths)
+        self._assert_save_safe(buses, self.link_paths)
+
+    def _observe_actual_devices(self):
+        devices = {}
+        for role, name in self.names.items():
+            actual_device, link_path = self.observe_bus_paths(name)
+            assert link_path == self.link_paths[name], (
+                f"slaveSim 总线 {name} 的固定配置路径应为 {self.link_paths[name]}，运行页显示 {link_path}")
+            devices[role] = actual_device
+        return devices
 
     def _station(self, name, address, value):
         bus = self._config_bus(name)
@@ -42,7 +52,7 @@ class RtuQualitySimulator(SlaveSimPage):
 
     def _assert_mode(self, buses, role, address, value):
         bus = self._unique([bus for bus in buses if bus["name"] == self.names[role]], f"本例 {role} 总线")
-        assert bus["link"] == self.paths[bus["name"]], f"模拟总线串口路径变化：{bus!r}"
+        assert bus["link"] == self.link_paths[bus["name"]], f"模拟总线固定配置路径变化：{bus!r}"
         if address is None:
             assert not bus["slaves"], f"静默阶段目标站仍存在：{bus!r}"
             return
@@ -57,23 +67,29 @@ class RtuQualitySimulator(SlaveSimPage):
         for name in self.names.values():
             draft, link = self._add_default_bus(replace_before=before)
             self._replace(self._field(self._config_bus(draft), "总线名称"), name)
-            self.paths[name] = link
-        check_paths(tuple(self.paths.values()))
+            self.link_paths[name] = link
         self._station(self.names["reference"], 0, 100)
         actual = self._save_configuration("重建品质验收参照及静默目标总线", before=before,
-                                          owned_names=self.paths, removed_names=tuple(bus["name"] for bus in before))
+                                          owned_names=self.link_paths, removed_names=tuple(bus["name"] for bus in before))
         self._assert_mode(actual, "reference", 0, 100)
         self._assert_mode(actual, "target", None, 0)
-        return {role: self.paths[name] for role, name in self.names.items()}
+        self.actual_devices = self._observe_actual_devices()
+        assert self.actual_devices["reference"] != self.actual_devices["target"], (
+            f"参照与目标总线必须使用不同的实际设备：{self.actual_devices!r}")
+        check_paths(tuple(self.actual_devices.values()))
+        return self.actual_devices
 
     def set_target(self, address, value, label):
         before = self._read_configuration(f"切换{label}前")
         self._check_owned_paths(before)
         self._station(self.names["target"], address, value)
         actual = self._save_configuration(label, before=before, owned_names=(self.names["target"],),
-                                          legacy_owned_names=self.paths)
+                                          legacy_owned_names=self.link_paths)
         self._assert_mode(actual, "target", address, value)
         self._assert_mode(actual, "reference", 0, 100)
+        devices = self._observe_actual_devices()
+        assert devices == self.actual_devices, (
+            f"切换{label}后模拟总线的实际设备已变化，RTU 连接使用 {self.actual_devices!r}，运行页显示 {devices!r}")
 
     def wait_target_exchange(self, address, timeout):
         """从本页最新配置应用后的报文证明目标实际收到读请求及按场景应答。"""

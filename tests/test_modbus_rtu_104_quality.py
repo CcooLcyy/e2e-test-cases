@@ -255,12 +255,13 @@ LOGIN = (
 OPEN_PROTOCOL = Step("quality.rtu.links", "打开已连接设备的 RTU 配置", "可读取 RTU 连接列表", _open_protocol)
 PREPARE_SCENARIO = (
     Step("quality.sim.prepare", "读取配置、删除旧总线并新建参照与目标总线",
-         "一次保存应用后仅有两路新总线，实际串口路径可用，参照站应答 100，目标站初始无应答", _prepare_simulator),
+         "一次保存应用后仅有两路新总线，运行页实际设备各不相同且未被既有 RTU 连接使用，参照站应答 100，目标站初始无应答",
+         _prepare_simulator),
     Step("quality.rtu.reference", "创建并核对本例参照 RTU 点",
-         "参照 RTU 连接与点表使用本例模拟串口、站号 1、保持寄存器 0 和正死区",
+         "参照 RTU 连接与点表使用参照总线的实际设备、站号 1、保持寄存器 0 和正死区",
          lambda context: _prepare_rtu(context, "reference")),
     Step("quality.rtu.target", "创建并核对本例目标 RTU 点",
-         "目标 RTU 连接与点表使用另一模拟串口、站号 1、保持寄存器 0 和正死区",
+         "目标 RTU 连接与点表使用目标总线的实际设备、站号 1、保持寄存器 0 和正死区",
          lambda context: _prepare_rtu(context, "target")),
     Step("quality.iec104.create", "建立本例带时标 IEC104 被控站", "页面显示本例独立链路及监听端口", _create_iec104),
     Step("quality.iec104.reference", "导入参照 RTU 点为 IEC104 短浮点遥测", "参照点的 IOA 在点表显示",
@@ -288,7 +289,7 @@ def _drive_target(index, label, address, value, expected):
     def drive(context):
         context.simulator.set_target(address, value, label)
         context.simulator_stage = context.simulator.wait_target_exchange(address, context.profile["phase_timeout_seconds"])
-    return Step(f"quality.sim.phase.{index}", f"设置目标站工况：{label}", expected, drive)
+    return Step(f"quality.sim.phase.{index}", f"设置目标站工况：{label}", f"{expected}，两路实际设备路径保持不变", drive)
 
 
 SIMULATOR_EXPECTED = ("目标站在地址 0 正常应答 100", "目标站不存在，读取无应答",
@@ -355,7 +356,10 @@ def _cleanup(context, request, failure):
                     context.simulator.clear_all_buses()
             except BaseException as error:
                 metadata.setdefault("RTU品质清理错误", []).append(f"{SIM_CLEANUP.action}：{error}")
-                metadata["待核对的品质模拟资源"] = context.simulator.paths
+                metadata["待核对的品质模拟资源"] = {
+                    "固定配置路径": context.simulator.link_paths,
+                    "实际设备": context.simulator.actual_devices,
+                }
                 if failure is None and not upper_failed:
                     raise
 
@@ -364,9 +368,9 @@ def _cleanup(context, request, failure):
            MASTER104_START, *INITIAL_SESSION, *OBSERVATIONS, VERIFY_FRAMES,
            UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH, MASTER104_FINISH, DESKTOP_FINISH)
 @execution_logic("""
-1. 登录上位机并连接现场下位机，清除 slaveSim 原有总线，重建参照和目标两路串口。参照站正常应答 100，目标站初始无应答。用实际串口创建两个 RTU 采集点，设置正死区，导入专用 IEC104 被控站为带时标短浮点遥测，核对两个点的 IOA 和数据总线路由，启动链路与轮询。
+1. 登录上位机并连接现场下位机，清除 slaveSim 原有总线，重建参照和目标两路串口。参照站正常应答 100，目标站初始无应答。从运行页读取两路「实际设备」，确认未被既有 RTU 连接使用后创建两个 RTU 采集点，设置正死区，导入专用 IEC104 被控站为带时标短浮点遥测，核对两个点的 IOA 和数据总线路由，启动链路与轮询。
 2. 用独立 IEC104 主站建立会话，收到 STARTDT 确认后发起总召。核对主站点表和原始报文中参照点有效，目标点在总召响应及总召结束前的自发遥测中均缺席。
-3. 依次将目标站切为正常应答 100、无应答、异常应答 0x02、恢复应答 100。在 slaveSim 报文中确认每个工况实际生效，并在主站等待新的目标自发遥测。每轮值均为 100，品质依次为正常（0x00）、NT（0x40）、IV+NT（0xC0）、恢复正常（0x00）。
+3. 依次将目标站切为正常应答 100、无应答、异常应答 0x02、恢复应答 100。每次切换后确认两路实际设备路径保持不变，在 slaveSim 报文中确认工况实际生效，并在主站等待新的目标自发遥测。每轮值均为 100，品质依次为正常（0x00）、NT（0x40）、IV+NT（0xC0）、恢复正常（0x00）。
 4. 保存并复核原始报文。核对总召肯定确认和终止、目标遥测的传送类型及 CP56Time2a 时标。两种故障沿用相同时标，重复故障不刷新，恢复后时标更新。失败时保留现场和报文，随后清理本例 IEC104、RTU 和路由配置，清空 slaveSim 总线并回读确认。
 """)
 def test_rtu_quality_reaches_iec104_with_unchanged_value(request):

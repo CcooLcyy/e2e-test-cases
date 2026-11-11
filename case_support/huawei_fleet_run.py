@@ -46,14 +46,17 @@ class HuaweiFleetRun:
                 except (AssertionError, NoSuchElementException, TimeoutException) as error:
                     raise RuntimeError(f"{bus['name']} 站号{station}的新建华为寄存器不可观察：{error}") from error
                 self.desktop.check(f"确认第{bus['index']}路站号{station}的模拟设备及串口",
-                                   (source["bus"], source["station_id"], source["link_path"]),
-                                   (bus["name"], station, bus["serial_device"]))
+                                   (source["bus"], source["station_id"], source["actual_device"], source["link_path"]),
+                                   (bus["name"], station, bus["serial_device"], bus["link_path"]))
                 device["point_addresses"] = {point.key: source["registers"][point.address]["address"] for point in READ_POINTS}
 
     def create_device(self, bus, device):
         station = device["station_id"]
         name = f"e2e-huawei-{self.run_id}-r{bus['index']}-s{station}"
         tags = {point.key: f"{name}-{point.key}" for point in READ_POINTS}
+        self.desktop.check(f"创建前核对第{bus['index']}路的实际设备和固定配置路径",
+                           self.simulator.observe_bus_paths(bus["name"]),
+                           (bus["serial_device"], bus["link_path"]))
         self.upper.create_connection(name, bus["serial_device"], self.config.baud_rate, 8, 1, "N", station,
                                      self.config.poll_interval_ms)
         for point in READ_POINTS:
@@ -153,8 +156,12 @@ class HuaweiFleetRun:
                     stage_errors.append(f"源寄存器{address}尚未达到工况{stage}的状态值{expected}")
             source_stage_seen = source_stage_seen or not stage_errors
             errors = stage_errors.copy()
-            if before["link_path"] != bus["serial_device"] or after["link_path"] != bus["serial_device"]:
-                errors.append("模拟器实际总线串口路径与下位机连接配置不一致")
+            if before["actual_device"] != bus["serial_device"] or after["actual_device"] != bus["serial_device"]:
+                errors.append(f"模拟器实际设备与下位机连接配置 {bus['serial_device']} 不一致，"
+                              f"前采样 {before['actual_device']}，后采样 {after['actual_device']}")
+            if before["link_path"] != bus["link_path"] or after["link_path"] != bus["link_path"]:
+                errors.append(f"模拟器固定配置路径与保存值 {bus['link_path']} 不一致，"
+                              f"前采样 {before['link_path']}，后采样 {after['link_path']}")
             if after["refresh_tick"] <= before["refresh_tick"]:
                 errors.append("模拟器后采样不是新的页面状态刷新")
             if (before["bus"], before["station_id"]) != (bus["name"], device["station_id"]):
@@ -163,7 +170,7 @@ class HuaweiFleetRun:
             if elapsed > self.config.acquisition_timeout:
                 errors.append(f"采样已超过{self.config.acquisition_timeout}秒时限，不能判定按时匹配")
             last = {"工况": stage, "路号": bus["index"], "总线": bus["name"], "站号": device["station_id"],
-                    "连接名称": connection["name"], "串口": bus["serial_device"],
+                    "连接名称": connection["name"], "串口": bus["serial_device"], "固定配置路径": bus["link_path"],
                     "点位": rows, "模拟器前采样": before, "模拟器后采样": after,
                     "上位机采样": upper, "工况错误": errors,
                     "已观察到预定源工况": source_stage_seen,

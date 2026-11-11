@@ -6,6 +6,7 @@ from hashlib import sha256
 import json
 import logging
 from pathlib import Path, PurePosixPath
+import re
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
@@ -394,8 +395,6 @@ class SlaveSimPage:
             name = f"e2e-rtu-{uuid4().hex[:12]}"
             self._replace(self._field(self._config_bus(default_name), "总线名称"), name)
             self._add_basic_stations(name, station_count)
-            if check_paths is not None:
-                check_paths((new_link,))
         actual = self._save_configuration("清空原有总线并建立本例总线及手动寄存器",
                                           before=before, owned_names=(name,), removed_names=removed_names)
         rebuilt = self._unique(actual, "重建后 slaveSim 总线")
@@ -408,17 +407,23 @@ class SlaveSimPage:
         if selected is None:
             raise AssertionError("新增资源保存后未形成预期的 manual UINT16 AB 读写测试点")
         bus, stations = selected
-        runtime = {"bus": bus["name"], "serial_device": bus["link"], "stations": stations}
-        config = RtuRuntime(bus["name"], bus["link"], tuple(RtuStation(**station) for station in stations),
-                            float(environment.get("modbus_acquisition_timeout", 300)))
-        self.desktop.metadata["RTU运行时资源"] = runtime
-        self.desktop.metadata["RTU串口参数来源"] = "slaveSim采用PTY，无UART参数；DSP使用9600/8N1，路径是否可访问由真实连接及采集结果判定"
+        station_points = tuple(RtuStation(**station) for station in stations)
         self.driver.find_element(By.ID, "show-runtime").click()
-        for station in config.stations:
-            observed = self.observe(config.bus, station.station_id, "0x03", station.address)
-            if observed["link_path"] != config.serial_device:
-                raise AssertionError("slaveSim运行路径与实际保存配置不一致，未猜测宿主机路径")
-        return config
+        devices = set()
+        for station in station_points:
+            observed = self.observe(bus["name"], station.station_id, "0x03", station.address)
+            if observed["link_path"] != new_link:
+                raise AssertionError("slaveSim 运行页的固定配置路径与本例保存值不一致")
+            devices.add(observed["actual_device"])
+        serial_device = self._unique(tuple(devices), "本例总线实际设备")
+        self.desktop.metadata["RTU运行时资源"] = {
+            "bus": bus["name"], "serial_device": serial_device, "link_path": new_link, "stations": stations,
+        }
+        self.desktop.metadata["RTU串口参数来源"] = "DSP 使用 slaveSim 运行页的实际设备和 9600/8N1"
+        if check_paths is not None:
+            check_paths((serial_device,))
+        return RtuRuntime(bus["name"], serial_device, station_points,
+                          float(environment.get("modbus_acquisition_timeout", 300)))
 
     def clear_all_buses(self):
         """用例结束时清空全部总线并核对保存结果，任务已停止时仍执行。"""
@@ -464,8 +469,7 @@ class SlaveSimPage:
         self._verified.add(key)
         self.driver.find_element(By.ID, "show-runtime").click()
 
-    def _row(self, key):
-        bus, station, function, address = key
+    def _runtime_workspace(self, bus):
         buttons = self.driver.find_elements(By.XPATH, "//div[@id='buses']//button[contains(@class,'bus-choice')][strong[normalize-space(.)=" + _literal(bus) + "]]")
         button = self._unique(buttons, "模拟器运行总线")
         if button.get_attribute("aria-pressed") != "true":
@@ -474,6 +478,35 @@ class SlaveSimPage:
         workspace = self.driver.find_element(By.XPATH, "//section[contains(@class,'bus-workspace')][@data-bus-key=" + _literal(bus_key) + "]")
         if "连接中断" in workspace.find_element(By.CSS_SELECTOR, ".bus-summary").text:
             raise AssertionError("slaveSim 连接中断，页面反馈可能过期")
+        return workspace
+
+    @staticmethod
+    def runtime_bus_paths(workspace):
+        def read(label):
+            return workspace.find_element(
+                By.XPATH, ".//div[contains(@class,'bus-path-row')][span[normalize-space(.)=" + _literal(label)
+                + "]]/code[contains(@class,'bus-path-value')]",
+            ).text.strip()
+
+        actual_device = read("实际设备")
+        if not re.fullmatch(r"/dev/pts/[0-9]+", actual_device):
+            raise AssertionError(f"slaveSim 运行页未提供有效的实际 PTY 设备：{actual_device!r}")
+        return actual_device, read("固定配置路径")
+
+    def observe_bus_paths(self, bus):
+        with self._step(f"读取 slaveSim 总线 {bus} 的实际设备和固定配置路径") as entry:
+            before = self._tick()
+            self.driver.find_element(By.ID, "show-runtime").click()
+            self._wait(lambda _: self._tick() > max(before, 0), "slaveSim 没有新的总线状态")
+            actual_device, link_path = self.runtime_bus_paths(self._runtime_workspace(bus))
+            result = {"bus": bus, "actual_device": actual_device, "link_path": link_path}
+            self._snapshot(result)
+            entry["实际"] = result
+            return actual_device, link_path
+
+    def _row(self, key):
+        bus, station, function, address = key
+        workspace = self._runtime_workspace(bus)
         device = workspace.find_element(By.CSS_SELECTOR, f"section.runtime-device[data-device-id='{station}']")
         group = device.find_element(By.CSS_SELECTOR, "details.runtime-registers")
         self._open(group)
@@ -499,10 +532,11 @@ class SlaveSimPage:
             raise AssertionError("模拟器当前值或原始字节格式无效") from None
         if len(encoded) != 2 or not value.is_finite() or value != int.from_bytes(encoded, "big"):
             raise AssertionError(f"模拟器当前值与 UINT16 AB 原始字节不一致：{cells[4].text} / {raw}")
-        paths = workspace.find_elements(By.CSS_SELECTOR, ".bus-path-value")
+        actual_device, link_path = self.runtime_bus_paths(workspace)
         return {"bus": key[0], "station_id": key[1], "function": key[2], "address": key[3],
                 "type": cells[2].text, "tag": cells[3].text, "value": int(value), "raw": raw,
-                "link_path": paths[1].text, "observed_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+                "actual_device": actual_device, "link_path": link_path,
+                "observed_at": datetime.now().astimezone().isoformat(timespec="milliseconds"),
                 "refresh_tick": self._tick()}
 
     def _snapshot(self, result):

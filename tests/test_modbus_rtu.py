@@ -33,7 +33,7 @@ SIMULATOR_START = Step("rtu.simulator.start", "打开 slaveSim 观察会话", "�
 RTU_LOGIN_STEPS = login_steps("login")
 RTU_OPEN = Step("rtu.open", "通过上位机当前业务入口打开 RTU 配置", "上位机显示可读取的连接列表")
 RTU_PREPARE_SIM = Step("rtu.simulator.prepare", "检查并清空 slaveSim 原有总线，按本例重建总线、站点及寄存器",
-                       "仅保留本例新建总线，已记录运行态总线、串口和实际站点映射")
+                       "仅保留本例新建总线，已读回运行页的实际设备、站号和寄存器地址")
 RTU_CLEANUP = Step("rtu.cleanup", "停止并清理本次创建的 RTU 连接及点表", "本例连接已删除")
 CONFIGURATION_PREPARE = Step("rtu.config.prepare", "读取专用测试账号", "测试账号配置有效")
 CONFIGURATION_CLEANUP = Step("rtu.config.cleanup", "清理本次创建的 RTU 连接及点表", "本例连接已删除")
@@ -55,14 +55,14 @@ class RtuScenario:
         point = self.point(index)
         observed = self.simulator.observe(self.environment.bus, point.station_id, "0x03", point.address,
                                           verify_manual=False)
-        self.desktop.check("两端使用同一专用串口路径", observed["link_path"], self.environment.serial_device)
+        self.desktop.check("两端使用同一实际设备", observed["actual_device"], self.environment.serial_device)
         return observed
 
     def set_simulator(self, index, expected):
         point = self.point(index)
         config = self.environment
         observed = self.simulator.set_value(config.bus, point.station_id, "0x03", point.address, expected)
-        self.desktop.check("模拟器工况对应本例串口", observed["link_path"], config.serial_device)
+        self.desktop.check("模拟器工况对应本例实际设备", observed["actual_device"], config.serial_device)
         self.desktop.check("模拟器工况已生效", observed["value"], expected)
 
     def create_connection(self, index, *, scaled=False):
@@ -374,7 +374,7 @@ def point_setup(index, *, scaled=False):
     label = f"第 {index + 1} 站"
     factors = "，倍率 0.1、偏移 2" if scaled else ""
     return (
-        Step(f"{prefix}.create", f"创建并保存{label} RTU 连接", "列表显示新连接及设备分配的编号",
+        Step(f"{prefix}.create", f"创建并保存{label} RTU 连接", "本地串口使用 slaveSim 实际设备，列表显示新连接编号",
              lambda scenario: scenario.create_connection(index, scaled=scaled)),
         Step(f"{prefix}.add_point", f"新增并保存{label}采集点", f"点表显示 0x03 UINT16 采集点{factors}",
              lambda scenario: scenario.add_point(index)),
@@ -452,7 +452,7 @@ def test_rtu_configuration_saved_on_both_pages(request, configuration_rtu):
 @pytest.mark.requires_modbus
 @rtu_plan(*INITIAL_ACQUISITION)
 @execution_logic("""
-1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建单站总线及手动寄存器，读回实际串口、站号和地址。
+1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建单站总线及手动寄存器，从运行页读回实际设备（/dev/pts/N）、站号和地址。
 2. 将模拟器寄存器置为 1234 并确认生效。用实测参数创建 RTU 连接和 0x03 UINT16 点，设置倍率 1、偏移 0，启动轮询并打开运行视图。
 3. 在采集时限内核对模拟器原始值和上位机实时值均为 1234，且上位机质量正常、采集时间有效、地址和功能码与配置一致。
 4. 保存双端观察和上位机截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
@@ -465,7 +465,7 @@ def test_rtu_initial_acquisition_matches_simulator(request, independent_rtu):
 @pytest.mark.requires_modbus
 @rtu_plan(*SOURCE_CHANGE)
 @execution_logic("""
-1. 登录上位机并连接现场下位机。用 slaveSim 重建单站总线，将手动寄存器置为 1234 并确认生效。按实际串口、站号和地址配置 0x03 UINT16 点，倍率为 1、偏移为 0，启动轮询。
+1. 登录上位机并连接现场下位机。用 slaveSim 重建单站总线，将手动寄存器置为 1234 并确认生效。按运行页的实际设备（/dev/pts/N）、站号和地址配置 0x03 UINT16 点，倍率为 1、偏移为 0，启动轮询。
 2. 在采集时限内核对模拟器和上位机均为 1234，且上位机质量正常、地址和功能码正确，记录有效的采集时间。
 3. 在 slaveSim 将同一寄存器改为 2345 并回读确认。保持轮询，在时限内核对上位机实时值为 2345、质量仍正常、采集时间有效且与前次不同。
 4. 保存两轮双端对照和截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
@@ -478,7 +478,7 @@ def test_rtu_source_change_updates_value_and_time(request, independent_rtu):
 @pytest.mark.requires_modbus
 @rtu_plan(*SCALED_CHANGE)
 @execution_logic("""
-1. 登录上位机并连接现场下位机。用 slaveSim 重建单站总线，将手动寄存器置为 1234 并确认生效，读回实际串口、站号和地址。
+1. 登录上位机并连接现场下位机。用 slaveSim 重建单站总线，将手动寄存器置为 1234 并确认生效，从运行页读回实际设备（/dev/pts/N）、站号和地址。
 2. 按实际参数新建 RTU 连接和 0x03 UINT16 点，设置倍率 0.1、偏移 2，启动轮询。在时限内核对模拟器为 1234、上位机工程量为 125.4，并记录采集时间。
 3. 将同一寄存器改为 2345 并确认生效，在时限内核对上位机工程量更新为 236.5，采集时间与前次不同。两轮均核对质量正常、采集时间有效、地址和功能码正确。
 4. 保存两轮原始值和工程量对照及截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
@@ -492,7 +492,7 @@ def test_rtu_scale_and_offset_match_fixed_expectations(request, independent_rtu)
 @rtu_plan(*TWO_STATIONS)
 @execution_logic("""
 1. 登录上位机并连接现场下位机。用 slaveSim 重建一条总线和两个从站，将两站手动寄存器分别置为 1234、4321 并确认生效。
-2. 在上位机用同一实际串口、不同站号分别创建连接和 0x03 UINT16 点，倍率为 1、偏移为 0，启动两站轮询。在时限内逐站核对双端值，并记录两站的采集时间。
+2. 在上位机用同一个 slaveSim 实际设备（/dev/pts/N）、不同站号分别创建连接和 0x03 UINT16 点，倍率为 1、偏移为 0，启动两站轮询。在时限内逐站核对双端值，并记录两站的采集时间。
 3. 只把第一站改为 2345。在时限内确认第一站采集到 2345，第二站采集时间已刷新且仍为 4321。两轮均逐站核对模拟器原始值、上位机质量、采集时间、地址和功能码。
 4. 保存各站两轮的双端对照和截图，失败时先保留现场。删除本例 RTU 连接及点表，清空 slaveSim 总线并回读确认。
 """)

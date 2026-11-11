@@ -30,7 +30,7 @@ SIMULATOR_START = Step("fleet.simulator.open", "打开 slaveSim 观察会话", "
 SIMULATOR_FINISH = Step("fleet.simulator.close", "关闭 slaveSim 观察会话", "释放本次浏览器资源")
 OPEN_LINKS = Step("fleet.links.open", "打开上位机当前目标的 RTU 配置", "当前设备的 RTU 连接列表可用")
 SIMULATOR_CREATE = Step("fleet.simulator.create", "读取并替换 slaveSim 全部总线，创建六路 21 台华为机群",
-                        "一次保存并应用，读回六路总线、实际串口和站号，确认串口可用于上位机")
+                        "保存应用后从运行页读回六路实际设备，核对固定配置路径和站号，检查已有连接是否占用实际设备")
 FLEET_CLEANUP = Step("fleet.links.cleanup", "停止并删除本次机群连接", "本次创建的连接均已清理")
 SIMULATOR_CLEANUP = Step("fleet.simulator.cleanup", "清空 slaveSim 全部总线", "读取配置确认没有剩余总线")
 LOGIN_STEPS = login_steps("login")
@@ -139,12 +139,12 @@ def _prepare_device_step(route, station):
         fleet.create_device(bus, bus["devices"][station - 1])
 
     return Step(f"fleet.prepare.route-{route}.station-{station}", f"新建第{route}路站号{station}的 RTU 连接",
-                "本例专用连接已保存18个采集点并启动轮询", prepare,
+                "本例专用连接使用 slaveSim 实际设备，保存18个采集点并启动轮询", prepare,
                 group="准备本例 RTU 连接")
 
 
 PREPARE_STEPS = (
-    Step("fleet.source", "读取新建的六路 21 台 slaveSim 模型", "从各台运行页面取得实际站号、串口和寄存器地址",
+    Step("fleet.source", "读取新建的六路 21 台 slaveSim 模型", "核对各台站号、实际设备和固定配置路径，读取寄存器地址",
          HuaweiFleetRun.check_sources),
     *(_prepare_device_step(route, station) for route in range(1, 7) for station in range(1, route + 1)),
 )
@@ -184,8 +184,8 @@ BUSINESS_STEPS = (
     *PREPARE_STEPS, *BUSINESS_STEPS, FLEET_CLEANUP, SIMULATOR_CLEANUP, SIMULATOR_FINISH, DESKTOP_FINISH,
 )
 @execution_logic("""
-1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建六路分别含 1 至 6 台华为逆变器的模拟总线。保存并回读各路实际串口、各台站号和寄存器地址，固定每台的可用直流功率和电压，关闭扰动。
-2. 按模拟器实际串口、站号和寄存器地址，在上位机为 21 台设备各建一条 RTU 连接，配置 18 个采集点并启动轮询。
+1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建六路分别含 1 至 6 台华为逆变器的模拟总线。固定每台的可用直流功率和电压，关闭扰动。保存应用后从运行页读取各路实际设备（/dev/pts/N），核对固定配置路径，检查已有连接是否占用实际设备，并读取各台站号和寄存器地址。
+2. 按 slaveSim 实际设备、站号和寄存器地址，在上位机为 21 台设备各建一条 RTU 连接，配置 18 个采集点并启动轮询。
 3. 从初始发电开始，通过 slaveSim 切换有功调节、正无功、负无功、待机、限电停运和恢复发电。每台每轮先按预定工况核对源端的电压、功率、功率因数和状态等，再对照稳定的模拟器原始值与上位机的 18 个采集点。核对换算、状态位、地址、功能码和正常质量，有变化的点还需更新时间。
 4. 147 项设备工况均须在各自时限内达到预期并保存双端证据。记录逐次采样、双端截图和汇总报告，失败时保留现场。停止并删除本例连接，清空 slaveSim 总线并回读确认。
 """)

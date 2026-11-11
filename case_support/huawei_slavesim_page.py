@@ -9,7 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
 
-from .slavesim_page import SlaveSimPage, _literal
+from .slavesim_page import SlaveSimPage
 
 
 LOG = logging.getLogger(__name__)
@@ -83,19 +83,23 @@ class HuaweiSlaveSimPage(SlaveSimPage):
 
         config = HuaweiFleetConfig(serial_devices=("",) * 6, acquisition_timeout=timeout)
         buses = build_fleet(config, run_id)
-        actual = self.create_fleet(buses, check_paths=check_paths)
+        actual = self.create_fleet(buses)
         saved = {bus["name"]: bus for bus in actual}
         for bus in buses:
             observed = saved[bus["name"]]
-            bus["serial_device"] = observed["link"]
+            actual_device, link_path = self.observe_bus_paths(bus["name"])
+            if link_path != observed["link"]:
+                raise AssertionError(f"{bus['name']} 固定配置路径预期 {observed['link']}，实际 {link_path}")
+            bus["serial_device"] = actual_device
             for device, slave in zip(bus["devices"], sorted(observed["slaves"], key=lambda row: row["station_id"]), strict=True):
                 device["station_id"] = slave["station_id"]
         validate_fleet(buses)
-        self.desktop.metadata["RTU串口参数来源"] = "串口取自 slaveSim 已保存配置及运行反馈，PTY 连接使用 9600/8N1"
-        self.driver.find_element(By.ID, "show-runtime").click()
-        return replace(config, serial_devices=tuple(bus["serial_device"] for bus in buses)), buses
+        serial_devices = tuple(bus["serial_device"] for bus in buses)
+        self.desktop.metadata["RTU串口参数来源"] = "DSP 使用 slaveSim 运行页的实际设备和 9600/8N1"
+        check_paths(serial_devices)
+        return replace(config, serial_devices=serial_devices), buses
 
-    def create_fleet(self, buses, *, check_paths):
+    def create_fleet(self, buses):
         validate_fleet(buses, require_paths=False)
         names = {bus["name"] for bus in buses}
         before = self._prepare_empty_configuration("本例机群创建前")
@@ -103,7 +107,7 @@ class HuaweiSlaveSimPage(SlaveSimPage):
             with self._step(f"新增华为总线 {bus['name']}，共{len(bus['devices'])}台"):
                 default_name, link = self._add_default_bus(replace_before=before)
                 self._replace(self._field(self._config_bus(default_name), "总线名称"), bus["name"])
-                bus["serial_device"] = link
+                bus["link_path"] = link
             for device in bus["devices"]:
                 station = device["station_id"]
                 with self._step(f"新增 {bus['name']} / 站号 {station} 华为V3行为模型"):
@@ -134,9 +138,9 @@ class HuaweiSlaveSimPage(SlaveSimPage):
                         raise AssertionError("未关闭华为模型轻微扰动")
             self.desktop.metadata.setdefault("华为创建意图", []).append(bus)
         with self._step("保存并应用六路21台华为模型配置"):
-            validate_fleet(buses)
-            check_paths(tuple(bus["serial_device"] for bus in buses))
             draft = self._configuration_snapshot("华为机群保存前草稿")
+            if {bus["name"]: bus["link"] for bus in draft} != {bus["name"]: bus["link_path"] for bus in buses}:
+                raise AssertionError("模拟器草稿的六路总线或固定配置路径与本例不一致")
             from .slavesim_runtime import validate_fleet_capacity
             capacity = validate_fleet_capacity(draft, buses)
             self._snapshot({"类型": "华为新增机群固定工况能力校验", "设备": capacity})
@@ -149,13 +153,8 @@ class HuaweiSlaveSimPage(SlaveSimPage):
             return actual
 
     def _device(self, bus, station):
-        buttons = self.driver.find_elements(By.XPATH, "//div[@id='buses']//button[contains(@class,'bus-choice')][strong[normalize-space(.)=" + _literal(bus) + "]]")
-        button = self._unique(buttons, "华为运行总线")
-        if button.get_attribute("aria-pressed") != "true":
-            button.click()
-        key = button.get_attribute("data-bus-key")
-        workspace = self.driver.find_element(By.XPATH, "//section[contains(@class,'bus-workspace')][@data-bus-key=" + _literal(key) + "]")
-        if "连接中断" in workspace.find_element(By.CSS_SELECTOR, ".bus-summary").text or self._tick() < 0:
+        workspace = self._runtime_workspace(bus)
+        if self._tick() < 0:
             raise AssertionError("模拟器连接中断，拒绝读取缓存反馈")
         device = workspace.find_element(By.CSS_SELECTOR, f"section.runtime-device[data-device-id='{station}']")
         if not device.find_elements(By.CSS_SELECTOR, "details.huawei-card"):
@@ -173,9 +172,9 @@ class HuaweiSlaveSimPage(SlaveSimPage):
             visible = self.driver.execute_script("""
                 return {rows: Array.from(arguments[0].querySelectorAll('tbody tr'), row =>
                     Array.from(row.querySelectorAll('td'), cell => cell.innerText)),
-                    status: arguments[1].querySelector('.huawei-status').innerText,
-                    paths: Array.from(arguments[2].querySelectorAll('.bus-path-value'), node => node.innerText)};
-            """, group, device, workspace)
+                    status: arguments[1].querySelector('.huawei-status').innerText};
+            """, group, device)
+            actual_device, link_path = self.runtime_bus_paths(workspace)
             registers = {}
             for address in addresses:
                 cells = self._unique([row for row in visible["rows"] if row[0].strip() == "0x03"
@@ -185,7 +184,7 @@ class HuaweiSlaveSimPage(SlaveSimPage):
                                       "tag": cells[3].strip(), "address": int(cells[1].strip())}
             self.driver.execute_script("arguments[0].scrollIntoView({block:'start'});", device)
             result = {"bus": bus, "station_id": int(device.get_attribute("data-device-id")), "registers": registers,
-                      "link_path": visible["paths"][1].strip(),
+                      "actual_device": actual_device, "link_path": link_path,
                       "status": visible["status"].strip(),
                       "observed_at": datetime.now().astimezone().isoformat(timespec="milliseconds"), "refresh_tick": self._tick()}
             self._snapshot(result)
