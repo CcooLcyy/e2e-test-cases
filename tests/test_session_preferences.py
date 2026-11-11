@@ -67,7 +67,7 @@ def test_remember_password_requires_manual_login_after_reopen(login_memory, requ
             "重开后无需填表或点击登录，自动进入原账号工作台",
             "重开后未操作登录表单，已验证工作台及退出入口可见，账号与重开前一致"),
     *logout_steps("logout"),
-    *form_steps("logout_form", remember=True, auto=False, filled=True),
+    *form_steps("logout_form", remember=True, auto=True, filled=True),
 )
 def test_auto_login_enters_same_account_after_reopen(login_memory, request):
     """下次自动登录在重开上位机后自动进入原账号工作台。"""
@@ -120,16 +120,20 @@ def test_forget_password_clears_saved_password_and_auto_login(login_memory, requ
 @session_plan(
     *login_steps("initial", auto=True),
     *logout_steps("logout"),
-    *form_steps("logout_form", remember=True, auto=False, filled=True),
+    *form_steps("logout_form", remember=True, auto=True, filled=True),
+    capture("explicit-logout-login-form",
+            "主动退出后的登录表单",
+            "保留原账号和掩码密码，记住密码和下次自动登录均勾选，停留在登录页",
+            "已验证原账号和密码回填、密码保持掩码、两项仍勾选，且停留在登录页"),
     reopen("reopen"),
-    *form_steps("reopened_form", remember=True, auto=False, filled=True),
+    *workspace_steps("reopened_workspace", compare_badge=True),
     capture("explicit-logout-after-reopen",
-            "主动退出后重开的登录表单",
-            "保留账号和掩码密码，仅记住密码已勾选，重开不自动登录",
-            "已验证账号和密码回填、密码掩码、自动登录未勾选，并仍停留在登录页"),
+            "主动退出后重开自动进入原账号工作台",
+            "重开后无需填表或点击登录，自动进入原账号工作台",
+            "重开后未操作登录表单，已验证工作台及退出入口可见，账号与退出前一致"),
 )
-def test_explicit_logout_disables_auto_login_but_keeps_password(login_memory, request):
-    """主动退出后关闭自动登录并保留记住密码，重开不再自动登录。"""
+def test_explicit_logout_preserves_auto_login_after_reopen(login_memory, request):
+    """主动退出后保留自动登录，重开上位机仍自动进入原账号工作台。"""
     run_case_plan(request, login_memory)
 
 
