@@ -1,4 +1,4 @@
-"""通过 DSP 上位机和 slaveSim 验证 RTU 配置及采集。"""
+"""通过 DSP 上位机验证 RTU 配置，通过 slaveSim 验证采集。"""
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
@@ -12,8 +12,8 @@ from uuid import uuid4
 import pytest
 
 from testbench.case_plan import (
-    DESKTOP_FINISH, DESKTOP_START, SITE_CONNECT, SLAVESIM_BROWSER_READY, Step, case_plan, run_steps,
-    track_fixture_context, track_fixture_step,
+    DESKTOP_FINISH, DESKTOP_START, SITE_CONNECT, SLAVESIM_BROWSER_READY, Step, case_plan,
+    run_case_plan, run_steps, track_fixture_context, track_fixture_step,
 )
 from testbench.login_page import PlatformLoginPage, load_login_account
 from case_support.login_plan import login_steps
@@ -23,7 +23,7 @@ from case_support.modbus_rtu_page import ModbusRtuPage
 from testbench.workspace import local_config
 
 
-pytestmark = [pytest.mark.case_group("Modbus RTU"), pytest.mark.requires_modbus]
+pytestmark = pytest.mark.case_group("Modbus RTU")
 LOGGER = logging.getLogger(__name__)
 RAW_FACTORS = (1, 0)
 SCALED_FACTORS = ("0.1", 2)
@@ -34,6 +34,8 @@ RTU_OPEN = Step("rtu.open", "通过上位机当前业务入口打开 RTU 配置"
 RTU_PREPARE_SIM = Step("rtu.simulator.prepare", "检查并清空 slaveSim 原有总线，按本例重建总线、站点及寄存器",
                        "仅保留本例新建总线，已记录运行态总线、串口和实际站点映射")
 RTU_CLEANUP = Step("rtu.cleanup", "停止并清理本次创建的 RTU 连接及点表", "本例连接已删除")
+CONFIGURATION_PREPARE = Step("rtu.config.prepare", "读取专用测试账号", "测试账号配置有效")
+CONFIGURATION_CLEANUP = Step("rtu.config.cleanup", "清理本次创建的 RTU 连接及点表", "本例连接已删除")
 SIMULATOR_CLEANUP = Step("rtu.simulator.cleanup", "清空 slaveSim 的全部总线", "保存后回读确认无总线")
 SIMULATOR_FINISH = Step("rtu.simulator.finish", "关闭 slaveSim 会话", "浏览器会话已关闭")
 
@@ -333,9 +335,39 @@ def two_station_rtu(request):
         yield scenario
 
 
-SIMULATOR_POINT = Step("rtu.source", "读取 slaveSim 的专用总线和目标寄存器",
-                       "实际串口与配置一致，目标站号和 0x03 UINT16 寄存器可读",
-                       lambda scenario: scenario.observe_simulator(0))
+@pytest.fixture
+def configuration_rtu(request):
+    with track_fixture_step(request, CONFIGURATION_PREPARE):
+        account = load_login_account(local_config("login-account.json"))
+    desktop = request.getfixturevalue("fresh_desktop")
+    context = SimpleNamespace(
+        desktop=desktop, page=PlatformLoginPage(desktop), account=account,
+        upper=ModbusRtuPage(desktop), name=f"e2e-rtu-{uuid4().hex[:16]}", site_connected=False,
+    )
+    try:
+        yield context
+    finally:
+        if context.upper.creation_started:
+            with track_fixture_step(request, CONFIGURATION_CLEANUP):
+                try:
+                    if not context.site_connected or desktop.driver is None:
+                        raise RuntimeError(f"现场直连不可用，请检查本例连接 {context.name} 是否仍存在")
+                    context.upper.cleanup()
+                except Exception as error:
+                    desktop.metadata["RTU连接清理错误"] = str(error)
+                    raise
+
+
+def connect_configuration_site(context):
+    context.upper.connect_site()
+    context.site_connected = True
+
+
+def restart_configuration_desktop(context):
+    context.site_connected = False
+    context.desktop.restart()
+
+
 def point_setup(index, *, scaled=False):
     prefix = f"rtu.s{index + 1}"
     label = f"第 {index + 1} 站"
@@ -360,11 +392,6 @@ def initial_source(index, expected):
 
 SET_FIRST_CHANGE = Step("rtu.s1.set_change", "将 slaveSim 第一站切换到下一工况",
                         "同一寄存器的新反馈显示 2345", lambda scenario: scenario.set_simulator(0, 2345))
-SAVED_CONFIGURATION = (
-    SIMULATOR_POINT, *point_setup(0),
-    Step("rtu.readback", "重新打开页面核对已保存的连接和点表", "连接参数和点位映射与配置及模拟器一致",
-         lambda scenario: scenario.upper.assert_saved_configuration()),
-)
 
 
 FIRST_BASELINE = observation_steps("first.baseline", 0, 1234)
@@ -388,30 +415,55 @@ TWO_STATIONS = (
 )
 
 
-@rtu_plan(*SAVED_CONFIGURATION)
-def test_rtu_configuration_saved_on_both_pages(request, independent_rtu):
-    """RTU连接与点表保存后重新读取一致，模拟器点位身份正确。"""
-    run_observations(request, SAVED_CONFIGURATION, independent_rtu)
+@case_plan(
+    CONFIGURATION_PREPARE, DESKTOP_START,
+    *RTU_LOGIN_STEPS,
+    Step(SITE_CONNECT.id, SITE_CONNECT.action, SITE_CONNECT.expected, connect_configuration_site),
+    Step(RTU_OPEN.id, RTU_OPEN.action, RTU_OPEN.expected, lambda context: context.upper.open_current_links()),
+    Step("rtu.config.create", "创建并保存 RTU 连接", "列表显示新连接及设备分配的编号",
+         lambda context: context.upper.create_connection(
+             context.name, serial_device=f"/dev/{context.name}", baud_rate=19200, data_bits=8,
+             stop_bits=1, parity="E", station_id=7, poll_interval_ms=750,
+         )),
+    Step("rtu.config.point", "新增并保存采集点", "点表显示 0x03 UINT16 采集点",
+         lambda context: context.upper.add_point(
+             f"{context.name}-value", address=16, scale="0.1", offset=2, deadband="0.5",
+         )),
+    Step("rtu.config.restart", "完全关闭并重新启动 DSP 上位机", "原进程退出，同一测试副本重新启动",
+         restart_configuration_desktop),
+    *login_steps("rtu.relogin"),
+    Step("rtu.config.reconnect", "重新连接同一台现场下位机", SITE_CONNECT.expected, connect_configuration_site),
+    Step("rtu.config.readback", "重新打开 RTU 配置并核对连接和点表", "回读配置逐项与保存前一致",
+         lambda context: context.upper.assert_saved_configuration()),
+    CONFIGURATION_CLEANUP, DESKTOP_FINISH,
+)
+def test_rtu_configuration_saved_on_both_pages(request, configuration_rtu):
+    """Modbus RTU 连接与点表保存后，重启上位机并重新登录可回读一致。"""
+    run_case_plan(request, configuration_rtu)
 
 
+@pytest.mark.requires_modbus
 @rtu_plan(*INITIAL_ACQUISITION)
 def test_rtu_initial_acquisition_matches_simulator(request, independent_rtu):
     """RTU初始采集值与slaveSim已生效原始值一致。"""
     run_observations(request, INITIAL_ACQUISITION, independent_rtu)
 
 
+@pytest.mark.requires_modbus
 @rtu_plan(*SOURCE_CHANGE)
 def test_rtu_source_change_updates_value_and_time(request, independent_rtu):
     """slaveSim数值变化后RTU实时值与采集时间同步更新。"""
     run_observations(request, SOURCE_CHANGE, independent_rtu)
 
 
+@pytest.mark.requires_modbus
 @rtu_plan(*SCALED_CHANGE)
 def test_rtu_scale_and_offset_match_fixed_expectations(request, independent_rtu):
     """RTU倍率0.1偏移2将两组原始值换算为125.4和236.5。"""
     run_observations(request, SCALED_CHANGE, independent_rtu)
 
 
+@pytest.mark.requires_modbus
 @rtu_plan(*TWO_STATIONS)
 def test_rtu_two_stations_do_not_cross_values(request, two_station_rtu):
     """同一RTU总线两站数值独立，改变第一站不改变第二站。"""
