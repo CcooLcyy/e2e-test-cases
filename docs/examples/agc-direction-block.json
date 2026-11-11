@@ -1,0 +1,13 @@
+{
+  "master_host": "192.0.2.1",
+  "master_port": 2404,
+  "common_address": 1,
+  "command_ioa": 16385,
+  "increase_ioa": 4097,
+  "decrease_ioa": 4098,
+  "measured_ioa": 8193,
+  "lower_kw": "10",
+  "middle_kw": "50",
+  "upper_kw": "100",
+  "timeout_seconds": 300
+}

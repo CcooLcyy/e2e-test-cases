@@ -1,0 +1,66 @@
+{
+  "groups": [
+    {
+      "name": "基础登录",
+      "cases": [
+        "tests/test_login_success.py::test_valid_account_enters_workspace",
+        "tests/test_login_validation.py::test_empty_login_reports_required_fields",
+        "tests/test_wrong_password.py::test_wrong_password_reports_explicit_credentials_error"
+      ]
+    },
+    {
+      "name": "启动与界面",
+      "cases": [
+        "tests/test_release_smoke.py::test_release_platform_settings_expand_and_collapse"
+      ]
+    },
+    {
+      "name": "密码记忆与自动登录",
+      "cases": [
+        "tests/test_session_preferences.py::test_no_remember_requires_password_after_reopen",
+        "tests/test_session_preferences.py::test_remember_password_requires_manual_login_after_reopen",
+        "tests/test_session_preferences.py::test_auto_login_enters_same_account_after_reopen",
+        "tests/test_session_preferences.py::test_auto_login_and_remember_password_checkbox_linkage",
+        "tests/test_session_preferences.py::test_forget_password_clears_saved_password_and_auto_login",
+        "tests/test_session_preferences.py::test_explicit_logout_disables_auto_login_but_keeps_password",
+        "tests/test_session_preferences.py::test_changing_account_does_not_reuse_saved_password"
+      ]
+    },
+    {
+      "name": "Modbus RTU",
+      "cases": [
+        "tests/test_modbus_rtu.py::test_rtu_configuration_saved_on_both_pages",
+        "tests/test_modbus_rtu.py::test_rtu_initial_acquisition_matches_simulator",
+        "tests/test_modbus_rtu.py::test_rtu_source_change_updates_value_and_time",
+        "tests/test_modbus_rtu.py::test_rtu_scale_and_offset_match_fixed_expectations",
+        "tests/test_modbus_rtu.py::test_rtu_two_stations_do_not_cross_values",
+        "tests/test_huawei_fleet.py::test_huawei_six_buses_21_devices_match",
+        "tests/test_modbus_rtu_104_quality.py::test_rtu_quality_reaches_iec104_with_unchanged_value"
+      ]
+    },
+    {
+      "name": "AGC 增减闭锁",
+      "cases": [
+        "tests/test_agc_direction_blocks.py::test_agc_upper_limit_sets_increase_block",
+        "tests/test_agc_direction_blocks.py::test_agc_lower_target_clears_increase_block",
+        "tests/test_agc_direction_blocks.py::test_agc_lower_limit_sets_decrease_block",
+        "tests/test_agc_direction_blocks.py::test_agc_higher_target_clears_decrease_block",
+        "tests/test_agc_direction_blocks.py::test_agc_increase_block_does_not_wait_for_measured_limit"
+      ]
+    },
+    {
+      "name": "AGC 通信重分配",
+      "cases": [
+        "tests/test_agc_rebalance.py::test_agc_redistributes_when_rtu_member_loses_communication"
+      ]
+    },
+    {
+      "name": "AVC 周期控制",
+      "cases": [
+        "tests/test_avc_control_periods.py::test_avc_voltage_deviation_recalculates_without_new_input",
+        "tests/test_avc_control_periods.py::test_avc_burst_respects_command_interval_and_uses_latest_target",
+        "tests/test_avc_control_periods.py::test_avc_stopped_group_applies_new_periods_after_restart"
+      ]
+    }
+  ]
+}

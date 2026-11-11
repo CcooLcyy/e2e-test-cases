@@ -1,0 +1,119 @@
+name: Testbench cases
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 用例发布频道
+        type: choice
+        options: [ci, stable]
+        default: ci
+
+permissions:
+  contents: read
+
+env:
+  CASE_CHANNEL: ${{ inputs.channel || 'ci' }}
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      artifact-id: ${{ steps.artifact.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: CcooLcyy/e2e-tests
+          ref: ${{ vars.TESTBENCH_RUNNER_REF || 'f1175cba7bef313f14ca09d44bae3ef2ba3422d0' }}
+          path: runner
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: runner/requirements.txt
+      - name: 核对用例包与执行器
+        run: |
+          python -m pip install -r runner/requirements.txt
+          archive=$(python scripts/package_cases.py "$CASE_CHANNEL" release)
+          python scripts/verify_catalog.py "$archive" runner
+      - name: 保留已核对的用例包
+        id: artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cases-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  publish:
+    needs: verify
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && vars.CASE_PACK_PUBLISH_ENABLED == 'true'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: ${{ inputs.channel == 'stable' && 'cases-stable' || 'cases-ci' }}
+    concurrency:
+      group: cases-platform-${{ inputs.channel || 'ci' }}
+    env:
+      PLATFORM_GRPC_ENDPOINT: ${{ vars.PLATFORM_GRPC_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: CcooLcyy/e2e-tests
+          ref: ${{ vars.TESTBENCH_RUNNER_REF }}
+          path: runner
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: CcooLcyy/MskDSPPlatformProto
+          ref: e86be3f7caf858937b38ddb52a71e63b23af4cf2
+          path: platform-proto
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.verify.outputs.artifact-id }}
+          path: release/
+      - name: 准备平台发布协议
+        run: |
+          python -m pip install 'grpcio==1.76.0' 'grpcio-tools==1.76.0'
+          proto=platform-proto/platform/v1
+          python -m grpc_tools.protoc -I "$proto" --python_out="$RUNNER_TEMP" --grpc_python_out="$RUNNER_TEMP" "$proto/software.proto"
+      - name: 签名并发布用例包
+        env:
+          CASE_PACK_PUBLIC_KEY: ${{ vars.CASE_PACK_PUBLIC_KEY }}
+          CASE_PACK_PUBLISHER_TOKEN: ${{ secrets.CASE_PACK_PUBLISHER_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.CASE_PACK_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.CASE_PACK_SIGNING_PASSWORD }}
+          TESTBENCH_RUNNER_REF: ${{ vars.TESTBENCH_RUNNER_REF }}
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: ${{ runner.temp }}
+        run: |
+          [[ "$TESTBENCH_RUNNER_REF" =~ ^[a-f0-9]{40}$ ]] || { echo '请配置用例 CI 对应的执行器提交'; exit 1; }
+          [[ -n "$TAURI_SIGNING_PRIVATE_KEY" && -n "$CASE_PACK_PUBLISHER_TOKEN" ]] || { echo '缺少用例包签名或发布凭据'; exit 1; }
+          shopt -s nullglob
+          archives=(release/*.zip)
+          [[ ${#archives[@]} == 1 ]] || { echo '应恰有一个已核对的用例包'; exit 1; }
+          archive=${archives[0]}
+          version=${archive#release/mskdsp-testbench-cases_}
+          version=${version%.zip}
+          npm exec --yes --package=@tauri-apps/cli@2.10.1 -- tauri signer sign --app-version "$version" "$archive"
+          python scripts/publish_cases.py "$CASE_CHANNEL" "$archive" runner
