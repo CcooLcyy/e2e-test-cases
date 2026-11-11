@@ -31,18 +31,9 @@ class AgcDirectionIec104(RtuQualityIec104):
         # IEC104 被控站导入遥调点时，从本连接向所选 AGC 命令点建路由。
         self.routes.append((iec104_endpoint, endpoint) if business_type == "遥调" else (endpoint, iec104_endpoint))
 
-    def _point_search(self):
-        search = (By.XPATH, self.POINT_CARD + "//input[@placeholder='搜索 Tag 或 IOA']")
-        if not self.upper._visible(search):
-            button = (By.XPATH, self.POINT_CARD + "//button[@aria-expanded='false'][starts-with(normalize-space(.),'筛选')]")
-            self.upper._click(button, "打开 IEC104 点表筛选")
-        return self.upper._until(lambda _: self.upper._visible(search), "IEC104 点表搜索框未显示")
-
     def _read_point(self, tag, point_type, business_type):
         self.upper._replace(self._point_search(), tag)
-        locator = (By.XPATH, self.POINT_CARD + "//*[@data-row-key=" + xpath_text(tag) + "]")
-        row = self.upper._until(lambda _: self.upper._visible(locator), f"IEC104 点表未显示已保存的 {tag}")
-        cells = [cell.text.strip() for cell in row.find_elements(By.CSS_SELECTOR, ":scope > .ant-table-cell")]
+        cells = self._saved_point_cells(tag)
         assert len(cells) == 11, f"IEC104 点 {tag} 的配置列不完整：{cells!r}"
         _, saved_tag, address, saved_type, saved_business, remote_control, fixed, scale, offset, deadband, _ = cells
         match = re.match(r"(\d+)\s*\(0x([0-9a-f]+)\)", address, re.IGNORECASE)

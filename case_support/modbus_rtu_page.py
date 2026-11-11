@@ -3,6 +3,7 @@ from decimal import Decimal, InvalidOperation
 import logging
 
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -391,9 +392,17 @@ class ModbusRtuPage:
             self._until(lambda _: "已停止" in self.driver.find_element(By.CSS_SELECTOR, ".modbus-connection-card .ant-card-head").text,
                         "本例连接未停止")
 
-    def _confirm(self, title, step):
+    def _confirm(self, title, step, *, clear_delete_tooltip=False):
         popup = ("//div[contains(@class,'ant-popover') and not(contains(@class,'hidden'))]"
                  "[.//*[contains(@class,'ant-popconfirm-title') and normalize-space(.)=" + xpath_text(title) + "]]")
+        if clear_delete_tooltip:
+            heading = (By.CSS_SELECTOR, ".protocol-connection-list-card .ant-card-head-title")
+            tooltip = (By.XPATH, "//*[@role='tooltip' and normalize-space(.)='删除连接']")
+            with self.desktop.step("移开删除连接的悬停提示", cancellable=not self._cleaning):
+                target = self._until(lambda _: self._visible(heading), "连接列表标题未显示")
+                ActionChains(self.driver).move_to_element(target).perform()
+                self._until(lambda driver: not any(item.is_displayed() for item in driver.find_elements(*tooltip)),
+                            "删除连接的悬停提示未消失")
         self._click(self._button("确定", popup), step)
 
     def cleanup(self):
@@ -417,7 +426,7 @@ class ModbusRtuPage:
                         self.stop()
                         self._assert_identity()
                         self._click((By.XPATH, "//button[@aria-label=" + xpath_text("删除连接 " + name) + "]"), "删除本例专用连接")
-                        self._confirm(f"确认删除 {name}？", "确认删除本例专用连接")
+                        self._confirm(f"确认删除 {name}？", "确认删除本例专用连接", clear_delete_tooltip=True)
                         self._until(lambda _: not self.driver.find_elements(*self._connection_locator(name)), "本例连接未删除")
                         for identity in self.desktop.metadata.get("本例RTU连接", []):
                             if identity["name"] == name and identity["conn_id"] == self.owned[name]["conn_id"]:

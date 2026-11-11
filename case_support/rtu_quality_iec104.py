@@ -123,6 +123,19 @@ class RtuQualityIec104:
                   "[.//div[contains(@class,'ant-select-item-option-content') and normalize-space(.)=" + xpath_text(text) + "]]")
         self.upper._click(choice, f"选择{text}")
 
+    def _point_search(self):
+        search = (By.XPATH, self.POINT_CARD + "//input[@placeholder='搜索 Tag 或 IOA']")
+        if not self.upper._visible(search):
+            button = (By.XPATH, self.POINT_CARD + "//button[@aria-expanded='false'][starts-with(normalize-space(.),'筛选')]")
+            self.upper._click(button, "打开 IEC104 点表筛选")
+        return self.upper._until(lambda _: self.upper._visible(search), "IEC104 点表搜索框未显示")
+
+    def _saved_point_cells(self, tag):
+        locator = (By.XPATH, self.POINT_CARD + "//*[@data-row-key=" + xpath_text(tag) + "]")
+        row = self.upper._until(lambda _: self.upper._visible(locator), f"IEC104 点表未显示已保存的 {tag}")
+        cells = row.find_elements(By.CSS_SELECTOR, ":scope > .ant-table-cell")
+        return [cell.get_property("innerText").strip() for cell in cells]
+
     def import_point(self, connection, tag, destination, *, module="ModbusRTU"):
         self._select_link(self.name)
         self._assert_link()
@@ -137,12 +150,19 @@ class RtuQualityIec104:
         draft = self.upper._until(lambda _: self.upper._visible(row), "导入点位草稿未显示")
         self.upper._replace(draft.find_element(By.XPATH, "./td[2]//input"), destination)
         self._button("导入 1 个点位", self.IMPORT_DIALOG, "保存 IEC104 遥测点和数据总线路由")
-        self.routes.append((f"{source} : {tag}", f"IEC104/{self.name} : {destination}"))
-        saved = (By.XPATH, self.POINT_CARD + "//tr[.//strong[normalize-space(.)=" + xpath_text(destination) + "]]")
-        point = self.upper._until(lambda _: self.upper._visible(saved), "保存后的 IEC104 遥测点未显示")
-        cells = [cell.text.strip() for cell in point.find_elements(By.XPATH, "./td")]
-        ioa = next((int(value.split()[0]) for value in cells if "(0x" in value and value.split()[0].isdecimal()), None)
-        assert ioa is not None and "FLOAT (短浮点值)" in cells and "遥测" in cells, f"IEC104 遥测配置不符：{cells!r}"
+        with self.upper.desktop.step(f"核对已保存的 IEC104 遥测点 {destination}",
+                                     expected="点表显示本例标签、IOA、短浮点类型和遥测业务类别") as step:
+            self.upper._until(lambda _: not self.upper._visible((By.XPATH, self.IMPORT_DIALOG)),
+                              f"IEC104 遥测点 {destination} 的导入窗口未关闭")
+            self.routes.append((f"{source} : {tag}", f"IEC104/{self.name} : {destination}"))
+            search = self._point_search()
+            previous_query = search.get_property("value")
+            self.upper._replace(search, destination)
+            cells = self._saved_point_cells(destination)
+            step["实际"] = cells
+            ioa = next((int(value.split()[0]) for value in cells if "(0x" in value and value.split()[0].isdecimal()), None)
+            assert ioa is not None and "FLOAT (短浮点值)" in cells and "遥测" in cells, f"IEC104 遥测配置不符：{cells!r}"
+            self.upper._replace(self._point_search(), previous_query)
         return ioa
 
     def check_routes(self):
