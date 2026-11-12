@@ -78,12 +78,12 @@ def test_remember_password_requires_manual_login_after_reopen(login_memory, requ
             "重开后无需填表或点击登录，自动进入原账号工作台",
             "重开后未操作登录表单，已验证工作台及退出入口可见，账号与重开前一致"),
     *logout_steps("logout"),
-    *form_steps("logout_form", remember=True, auto=True, filled=True),
+    *form_steps("logout_form", remember=True, auto=False, filled=True),
 )
 @execution_logic("""
 1. 用专用测试账号和正确密码登录独立副本，勾选「下次自动登录」，确认「记住密码」联动勾选，并记录工作台显示的账号。
 2. 正常关闭并重开同一副本，保留应用和 WebView2 数据。重开后直接等待工作台，确认无需输入或点击登录即可进入，退出入口可见且账号一致。保存工作台截图。
-3. 主动退出并确认，等待表单同步，核对原账号和掩码密码已回填、两项选项均保持勾选，页面持续停留在登录页。
+3. 主动退出并确认，等待表单同步，核对原账号和掩码密码已回填、「记住密码」仍勾选、「下次自动登录」已取消勾选，页面持续停留在登录页。
 """)
 def test_auto_login_enters_same_account_after_reopen(login_memory, request):
     """重开自动登录原账号"""
