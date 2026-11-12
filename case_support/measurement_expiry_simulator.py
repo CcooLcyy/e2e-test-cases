@@ -1,4 +1,4 @@
-"""从 slaveSim 页面准备独立 RTU 总线并保留各总线的实际报文。"""
+"""从 slaveSim 页面准备量测过期场景并保留本例的实际 RTU 报文。"""
 
 import json
 
@@ -42,18 +42,18 @@ class MeasurementExpirySimulator(SlaveSimPage):
 
     def prepare(self, name, specs, check_paths):
         """每个角色新建一条独立总线，按地址返回运行页读回的寄存器。"""
-        assert specs and all(specs.values()), "本例每条模拟总线至少需要一个寄存器"
+        assert specs and all(specs.values()), "量测过期场景的每条总线至少需要一个寄存器"
         names = {role: f"{name}-{role}" for role in specs}
-        before = self._prepare_empty_configuration("建立本例模拟场景前")
+        before = self._prepare_empty_configuration("量测过期场景准备前")
         links = {}
-        with self._step("新建本例 RTU 总线和手动寄存器"):
+        with self._step("新建量测过期场景的 RTU 总线和手动寄存器"):
             for role, bus in names.items():
                 draft, links[bus] = self._add_default_bus(replace_before=before)
                 self._replace(self._field(self._config_bus(draft), "总线名称"), bus)
                 self._add_registers(bus, specs[role])
 
         self._start_log(tuple(names.values()))
-        saved = self._save_configuration("保存本例的独立总线", before=before,
+        saved = self._save_configuration("建立量测过期场景的独立总线", before=before,
                                          owned_names=links, removed_names=tuple(bus["name"] for bus in before))
         assert {bus["name"]: bus["link"] for bus in saved} == links, f"保存后的模拟总线和路径不符：{saved!r}"
 
@@ -160,10 +160,10 @@ class MeasurementExpirySimulator(SlaveSimPage):
                     self._collect_log(finish=True)
                 finally:
                     self._watching = False
-                    path = self.desktop.artifacts / "slavesim-control-rtu.json"
+                    path = self.desktop.artifacts / "slavesim-measurement-expiry-rtu.json"
                     path.write_text(json.dumps({"ready": self._ready, "events": self._events,
                                                 "stream_error": self._stream_error}, ensure_ascii=False, indent=2),
                                     encoding="utf-8")
-                    self.desktop.metadata["控制用例RTU报文"] = path.name
+                    self.desktop.metadata["量测过期RTU报文"] = path.name
         finally:
             super().clear_all_buses()
