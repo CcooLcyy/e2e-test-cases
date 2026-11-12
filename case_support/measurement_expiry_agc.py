@@ -1,4 +1,6 @@
-"""Configure and observe the dedicated two-member AGC group through DSP Upper."""
+"""通过 DSP 上位机配置并观察按通信状态筛选成员的 AGC 组。"""
+
+from decimal import Decimal
 
 from selenium.webdriver.common.by import By
 
@@ -19,9 +21,10 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
     RUNTIME_TABLE = (By.XPATH, AgcDirectionSetup.OVERVIEW + "//div[contains(@class,'agc-runtime-members')]")
     RUNTIME_ROWS = ".ant-table-tbody > tr[data-row-key]"
 
-    def __init__(self, desktop):
+    def __init__(self, desktop, *, capacity_kw=100):
         super().__init__(desktop)
         self.members = {}
+        self.capacity_kw = capacity_kw
 
     def _choose_equal_allocation(self):
         locator = (By.XPATH, self.GROUP_DIALOG + "//label[normalize-space(.)='分配方式']"
@@ -42,7 +45,8 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
     def _add_member(self, member_name, connection_name, configure_expiry):
         self._click((By.XPATH, self.GROUP_DIALOG + "//button[@aria-label='添加成员']"), f"添加 AGC 成员 {member_name}")
         self._fill_group_field(self.MEMBER_DIALOG, "member_name", member_name)
-        for field, value in (("capacity_kw_decimal", 100), ("min_kw_decimal", 10), ("max_kw_decimal", 100)):
+        for field, value in (("capacity_kw_decimal", self.capacity_kw), ("min_kw_decimal", 10),
+                             ("max_kw_decimal", self.capacity_kw)):
             self._fill_group_field(self.MEMBER_DIALOG, field, value)
         connection = f"ModbusRTU / {connection_name}"
         for label, _, tag in self.MEMBER_POINTS:
@@ -51,24 +55,25 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         self._fill_group_field(self.MEMBER_DIALOG, "communication_timeout_ms", self.COMMUNICATION_TIMEOUT_MS)
         self._open_member_advanced()
         self._choose(self.MEMBER_DIALOG, "p_set_mode", "绝对值")
-        configure_expiry(self, self.MEMBER_DIALOG)
+        if configure_expiry is not None:
+            configure_expiry(self, self.MEMBER_DIALOG)
         self._click(self._button("确认成员", self.MEMBER_DIALOG), f"确认 AGC 成员 {member_name}")
         self._wait_dialog_closed(self.MEMBER_DIALOG, "确认成员")
 
     def _record_group(self, item):
         self.group = dict(group_name=self.name, members=dict(self.members), conn_id=self._group_identity(item),
-                          lower_kw=10, upper_kw=100, cleanup="待清理")
+                          lower_kw=10, upper_kw=self.capacity_kw, cleanup="待清理")
         self.desktop.metadata["本例 AGC 控制组"] = self.group
 
     def _expected_members(self):
         return self.members
 
-    def create_expiry_group(self, group_name, members, configure_expiry):
-        """Bind each member to its own RTU link and return the saved group and command tag."""
+    def create_communication_group(self, group_name, members, *, configure_expiry=None):
+        """为每个成员绑定独立的 RTU 连接，读回映射和总控输入 Tag。"""
         if self._draft_opened or self._save_requested or self.group is not None:
             raise RuntimeError("本例 AGC 控制组已开始创建")
-        if len(members) != 2 or len(set(members.values())) != 2:
-            raise ValueError("本例 AGC 需要两个成员各自使用独立 RTU 连接")
+        if len(members) < 2 or len(set(members.values())) != len(members):
+            raise ValueError("本例 AGC 需要至少两个成员，且每个成员使用独立 RTU 连接")
         self.name = group_name
         self.members = dict(members)
         self._control_view("控制策略")
@@ -76,9 +81,10 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         if self._group_item(group_name):
             raise RuntimeError(f"AGC 已存在同名控制组：{group_name}")
 
-        with self.desktop.step("新增本例 AGC 双成员控制组", expected={
+        with self.desktop.step("新增本例 AGC 控制组和成员", expected={
             "组": group_name, "成员与 RTU 连接": self.members, "模式": "周期直分配，绝对值，等权",
-            "成员容量及范围 kW": "100，10～100", "通信心跳超时毫秒": self.COMMUNICATION_TIMEOUT_MS,
+            "成员容量及范围 kW": f"{self.capacity_kw}，10～{self.capacity_kw}",
+            "通信心跳超时毫秒": self.COMMUNICATION_TIMEOUT_MS,
         }):
             self._draft_opened = True
             self._click(self._button("+ 新增控制组", self.LIST), "新增专用 AGC 控制组")
@@ -89,7 +95,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             self._members_tab()
             for member_name, connection_name in self.members.items():
                 self._add_member(member_name, connection_name, configure_expiry)
-            self._submit_group("保存控制组及两条 RTU 链路的路由")
+            self._submit_group("保存控制组及各成员 RTU 链路的路由")
 
         with self.desktop.step("读取已保存的 AGC 配置和实际点位"):
             overview = self._select_owned_group()
@@ -109,6 +115,8 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         cards = self.driver.find_elements(By.XPATH, self.GROUP_DIALOG + self.MEMBER_CARD)
         self.desktop.check("核对本例 AGC 成员", sorted(card.get_attribute("aria-label") for card in cards),
                            sorted(f"成员 {name}" for name in self.members))
+        capacity = f"{self.capacity_kw:.2f}"
+        share = f"{Decimal(100) / len(self.members):.1f}%"
         for name, connection_name in self.members.items():
             edit = (By.XPATH, self.GROUP_DIALOG + "//button[@aria-label=" + xpath_text(f"编辑成员 {name}") + "]")
             self._until(lambda _: (button := self._visible(edit)) and button.is_enabled(), f"成员 {name} 的映射尚未就绪")
@@ -116,7 +124,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             self.desktop.check(f"核对成员 {name} 可控状态", card.find_element(By.CSS_SELECTOR, ".ant-tag").text, "可控")
             summary = [node.text for node in card.find_elements(By.CSS_SELECTOR, ".agc-group-member__summary > span")]
             self.desktop.check(f"核对成员 {name} 容量、范围和分配比例", summary,
-                               ["额定容量 100.00 kW", "调节范围 10.00～100.00 kW", "理论占比 50.0%"])
+                               [f"额定容量 {capacity} kW", f"调节范围 10.00～{capacity} kW", f"理论占比 {share}"])
             for _, label, tag in self.MEMBER_POINTS:
                 binding = unique_match(card.find_elements(By.XPATH, ".//div[contains(concat(' ',normalize-space(@class),' '),"
                                        "' agc-group-member__point ')][./span[normalize-space(.)=" + xpath_text(label) + "]]/div/div"), label)
@@ -129,7 +137,8 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             mode = (By.XPATH, self.MEMBER_DIALOG + "//input[@id='p_set_mode']/ancestor::div[contains(concat(' ',normalize-space(@class),' '),"
                     "' ant-select ')][1]//*[@title='绝对值']")
             self._until(lambda _: self._visible(mode), f"成员 {name} 的指令未保存为绝对值")
-            configure_expiry(self, self.MEMBER_DIALOG, verify=True)
+            if configure_expiry is not None:
+                configure_expiry(self, self.MEMBER_DIALOG, verify=True)
             self._close_draft(self.MEMBER_DIALOG, "取消编辑")
         self._close_draft(self.GROUP_DIALOG, "取消")
         self._draft_opened = False
