@@ -1,4 +1,4 @@
-"""从本次创建的六路华为行为模型验收 RTU 双端采集。"""
+"""通过本例创建的华为行为模型验收 RTU 双端采集。"""
 import json
 import logging
 import os
@@ -14,7 +14,7 @@ from testbench.case_plan import (
     run_steps, track_fixture_context, track_fixture_step,
 )
 from case_support.case_metadata import execution_logic
-from case_support.huawei_fleet import READ_POINTS
+from case_support.huawei_fleet import FLEET_DEVICE_COUNT, FLEET_SIZE_LABEL, FLEET_STATIONS, READ_POINTS
 from case_support.huawei_fleet_run import DEVICE_EXPECTED, STAGES, HuaweiFleetRun, device_step_title
 from case_support.huawei_rtu_page import HuaweiRtuPage
 from testbench.login_page import PlatformLoginPage, load_login_account
@@ -30,8 +30,8 @@ FLEET_PREPARE = Step("fleet.prepare", "检查 slaveSim 入口并读取测试账�
 SIMULATOR_START = Step("fleet.simulator.open", "打开 slaveSim 观察会话", "运行页面显示新的状态刷新")
 SIMULATOR_FINISH = Step("fleet.simulator.close", "关闭 slaveSim 观察会话", "释放本次浏览器资源")
 OPEN_LINKS = Step("fleet.links.open", "打开上位机当前目标的 RTU 配置", "当前设备的 RTU 连接列表可用")
-SIMULATOR_CREATE = Step("fleet.simulator.create", "读取并替换 slaveSim 全部总线，创建六路 21 台华为机群",
-                        "保存应用后从运行页读回六路实际设备，核对固定配置路径和站号，检查已有连接是否占用实际设备")
+SIMULATOR_CREATE = Step("fleet.simulator.create", f"读取并替换 slaveSim 全部总线，创建 {FLEET_SIZE_LABEL} 华为机群",
+                        "保存应用后从运行页读回各路实际设备，核对固定配置路径和站号，检查已有连接是否占用实际设备")
 FLEET_CLEANUP = Step("fleet.links.cleanup", "停止并删除本次机群连接", "本次创建的连接均已清理")
 SIMULATOR_CLEANUP = Step("fleet.simulator.cleanup", "清空 slaveSim 全部总线", "读取配置确认没有剩余总线")
 LOGIN_STEPS = login_steps("login")
@@ -149,9 +149,9 @@ def _prepare_device_step(route, station):
 
 
 PREPARE_STEPS = (
-    Step("fleet.source", "读取新建的六路 21 台 slaveSim 模型", "核对各台站号、实际设备和固定配置路径，读取寄存器地址",
+    Step("fleet.source", f"读取新建的 {FLEET_SIZE_LABEL} slaveSim 模型", "核对各台站号、实际设备和固定配置路径，读取寄存器地址",
          HuaweiFleetRun.check_sources),
-    *(_prepare_device_step(route, station) for route in range(1, 7) for station in range(1, route + 1)),
+    *(_prepare_device_step(route, station) for route, stations in enumerate(FLEET_STATIONS, 1) for station in stations),
 )
 
 
@@ -169,10 +169,10 @@ def _device_step(stage_index, stage, route, station):
 
 def _stage_steps(index, stage):
     if index > 1:
-        yield Step(f"fleet.stage-{index}.apply", f"通过 slaveSim 设置全机群{stage}工况", "21台模型确认应用本轮工况",
+        yield Step(f"fleet.stage-{index}.apply", f"通过 slaveSim 设置全机群{stage}工况", f"{FLEET_DEVICE_COUNT} 台模型确认应用本轮工况",
                    lambda fleet: fleet.apply_stage(stage), group=stage)
-    for route in range(1, 7):
-        for station in range(1, route + 1):
+    for route, stations in enumerate(FLEET_STATIONS, 1):
+        for station in stations:
             yield _device_step(index, stage, route, station)
 
 
@@ -189,11 +189,12 @@ BUSINESS_STEPS = (
     *PREPARE_STEPS, *BUSINESS_STEPS, FLEET_CLEANUP, SIMULATOR_CLEANUP, SIMULATOR_FINISH, DESKTOP_FINISH,
 )
 @execution_logic(f"""
-1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建六路分别含 1 至 6 台华为逆变器的模拟总线。固定每台的可用直流功率和电压，关闭扰动。保存应用后从运行页读取各路实际设备（/dev/pts/N），核对固定配置路径，检查已有连接是否占用实际设备，并读取各台站号和寄存器地址。
-2. 按 slaveSim 实际设备、站号和寄存器地址，在上位机创建首条 RTU 连接并逐点录入 {len(READ_POINTS)} 个采集点，保存后一次回读整张配置表并按界面显示精度核对。寄存器 32000 配置为发电、待机和限电停运三个 BOOL 位点，32089 配置为 UINT16 设备状态码。其余 20 台通过上位机复制首条连接，修改并回读各自的连接名、实际串口和站号，核对点表与首台一致。每条连接核对后启动轮询。
+1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建两路华为逆变器模拟总线。第 1 路使用站号 1、2，第 2 路使用站号 1。为每台设置不同的可用直流功率和电压，关闭扰动，用于核对同路不同站号、不同路相同站号的采集结果。保存应用后从运行页读取各路实际设备（/dev/pts/N），核对固定配置路径，检查已有连接是否占用实际设备，并读取各台站号和寄存器地址。
+2. 按 slaveSim 实际设备、站号和寄存器地址，在上位机创建首条 RTU 连接并逐点录入 {len(READ_POINTS)} 个采集点，保存后一次回读整张配置表并按界面显示精度核对。寄存器 32000 配置为发电、待机和限电停运三个 BOOL 位点，32089 配置为 UINT16 设备状态码。其余 {FLEET_DEVICE_COUNT - 1} 台通过上位机复制首条连接，修改并回读各自的连接名、实际串口和站号，核对点表与首台一致。每条连接核对后启动轮询。
 3. 从初始发电开始，通过 slaveSim 切换有功调节、正无功、负无功、待机、限电停运和恢复发电。每台每轮先按预定工况核对源端的电压、功率、功率因数和状态（含 32000 原始整字值），再与上位机的 {len(READ_POINTS)} 个采集点对照。数值按原始换算值四舍五入到两位小数后精确比较，并核对状态位、地址、功能码和正常质量，有变化的点还需更新时间。
-4. 147 项设备工况均须在各自时限内达到预期并保存双端证据。记录逐次采样、双端截图和汇总报告，失败时保留现场。停止并删除本例连接，清空 slaveSim 总线并回读确认。
+4. {FLEET_DEVICE_COUNT * len(STAGES)} 项设备工况均须在各自时限内达到预期并保存双端证据。记录逐次采样、双端截图和汇总报告，失败时保留现场。停止并删除本例连接，清空 slaveSim 总线并回读确认。
 """)
 def test_huawei_six_buses_21_devices_match(request, huawei_fleet):
-    """华为六路 21 台七工况采集"""
+    """华为两路 3 台七工况采集"""
+    # 保留测试上位机用于用例识别及环境校验的 nodeid。
     run_steps(request, (*PREPARE_STEPS, *BUSINESS_STEPS), huawei_fleet)

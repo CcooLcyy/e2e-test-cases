@@ -9,6 +9,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
 
+from .huawei_fleet import FLEET_SIZE_LABEL, FLEET_STATIONS, HuaweiFleetConfig, build_fleet
 from .slavesim_page import SlaveSimPage
 
 
@@ -35,10 +36,10 @@ def decode_register(kind, raw, displayed):
 
 
 def validate_fleet(buses, *, require_paths=True):
-    if not isinstance(buses, list) or len(buses) != 6:
-        raise ValueError("华为机群必须恰好六路 RS485")
+    if not isinstance(buses, list) or len(buses) != len(FLEET_STATIONS):
+        raise ValueError(f"华为机群必须恰好有 {len(FLEET_STATIONS)} 路 RS485")
     names, paths = set(), set()
-    for index, bus in enumerate(buses, 1):
+    for index, (bus, stations) in enumerate(zip(buses, FLEET_STATIONS, strict=True), 1):
         name, path = bus.get("name"), bus.get("serial_device")
         if not isinstance(name, str) or not name.strip() or name in names:
             raise ValueError("华为总线名称必须非空且唯一")
@@ -47,8 +48,8 @@ def validate_fleet(buses, *, require_paths=True):
         names.add(name); paths.add(path)
         devices = bus.get("devices", [])
         if (any(type(device.get("station_id")) is not int for device in devices)
-                or [device.get("station_id") for device in devices] != list(range(1, index + 1))):
-            raise ValueError(f"第 {index} 路必须包含站号1至{index}，不得缺站或重复")
+                or tuple(device.get("station_id") for device in devices) != stations):
+            raise ValueError(f"第 {index} 路站号必须为 {list(stations)}，不得缺站或重复")
 
 
 class HuaweiSlaveSimPage(SlaveSimPage):
@@ -79,9 +80,7 @@ class HuaweiSlaveSimPage(SlaveSimPage):
                              if self._field(node, "站号（1～247）").get_attribute("value") == str(station)], "目标配置从站")
 
     def prepare_owned_fleet(self, timeout, run_id, *, check_paths):
-        from .huawei_fleet import HuaweiFleetConfig, build_fleet
-
-        config = HuaweiFleetConfig(serial_devices=("",) * 6, acquisition_timeout=timeout)
+        config = HuaweiFleetConfig(serial_devices=("",) * len(FLEET_STATIONS), acquisition_timeout=timeout)
         buses = build_fleet(config, run_id)
         actual = self.create_fleet(buses)
         saved = {bus["name"]: bus for bus in actual}
@@ -137,19 +136,19 @@ class HuaweiSlaveSimPage(SlaveSimPage):
                     if disturbance.is_selected():
                         raise AssertionError("未关闭华为模型轻微扰动")
             self.desktop.metadata.setdefault("华为创建意图", []).append(bus)
-        with self._step("保存并应用六路21台华为模型配置"):
+        with self._step(f"保存并应用 {FLEET_SIZE_LABEL} 华为模型配置"):
             draft = self._configuration_snapshot("华为机群保存前草稿")
             if {bus["name"]: bus["link"] for bus in draft} != {bus["name"]: bus["link_path"] for bus in buses}:
-                raise AssertionError("模拟器草稿的六路总线或固定配置路径与本例不一致")
+                raise AssertionError("模拟器草稿的总线或固定配置路径与本例不一致")
             from .slavesim_runtime import validate_fleet_capacity
             capacity = validate_fleet_capacity(draft, buses)
             self._snapshot({"类型": "华为新增机群固定工况能力校验", "设备": capacity})
-            actual = self._save_configuration("新增六路21台华为模型", before=before, owned_names=names,
+            actual = self._save_configuration(f"新增 {FLEET_SIZE_LABEL} 华为模型", before=before, owned_names=names,
                                               removed_names=tuple(bus["name"] for bus in before))
             if {bus["name"]: bus for bus in actual} != {bus["name"]: bus for bus in draft}:
                 raise AssertionError("模拟器保存后的实际配置与本例华为机群草稿不一致")
-            self.desktop.metadata["华为已创建六路"] = buses
-            LOG.info("已通过页面保存六路21台华为行为模型")
+            self.desktop.metadata["华为已创建机群"] = buses
+            LOG.info("已通过页面保存 %s 华为行为模型", FLEET_SIZE_LABEL)
             return actual
 
     def _device(self, bus, station):

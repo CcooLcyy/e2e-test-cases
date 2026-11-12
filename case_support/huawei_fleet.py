@@ -1,4 +1,4 @@
-"""华为六路21台固定拓扑、点表及独立双端验收规则。"""
+"""华为机群固定拓扑、点表及独立双端验收规则。"""
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -7,6 +7,9 @@ from testbench.modbus_rtu_config import decimal_value
 
 
 LOGGER = logging.getLogger(__name__)
+FLEET_STATIONS = ((1, 2), (1,))
+FLEET_DEVICE_COUNT = sum(len(stations) for stations in FLEET_STATIONS)
+FLEET_SIZE_LABEL = f"{len(FLEET_STATIONS)} 路 {FLEET_DEVICE_COUNT} 台"
 
 
 @dataclass(frozen=True)
@@ -68,9 +71,9 @@ class HuaweiFleetConfig:
 def build_fleet(config, run_id):
     """场景固定且每台不同；通过不同电压及有功识别同站号跨总线串站。"""
     buses, ordinal = [], 0
-    for index, path in enumerate(config.serial_devices, 1):
+    for index, (path, stations) in enumerate(zip(config.serial_devices, FLEET_STATIONS, strict=True), 1):
         devices = []
-        for station in range(1, index + 1):
+        for station in stations:
             ordinal += 1
             devices.append({"station_id": station, "ordinal": ordinal,
                             "dc_available_kw": 10 + ordinal, "grid_line_voltage_v": 380 + ordinal,
@@ -78,7 +81,7 @@ def build_fleet(config, run_id):
                             "disturbance_enabled": False})
         buses.append({"name": f"e2e-huawei-{run_id}-485-{index}", "index": index,
                       "serial_device": path, "devices": devices})
-    LOGGER.info("已生成六路华为行为拓扑，共21台，所有场景均关闭扰动")
+    LOGGER.info("已生成 %s 华为行为拓扑，所有场景均关闭扰动", FLEET_SIZE_LABEL)
     return buses
 
 

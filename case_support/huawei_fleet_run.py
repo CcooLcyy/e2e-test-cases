@@ -1,4 +1,4 @@
-"""六路21台页面编排和逐点证据，控制与采集边界明确记录。"""
+"""华为机群的页面操作和逐点采集证据。"""
 from collections import Counter
 from dataclasses import replace
 from decimal import Decimal
@@ -8,8 +8,8 @@ import time
 
 from selenium.common.exceptions import NoSuchElementException, TimeoutException
 
-from .huawei_fleet import (READ_POINTS, STATUS_VALUES, STATUS_WORD_VALUES, UNIMPLEMENTED_CONTROLS,
-                           build_fleet, compare_point, point_expected)
+from .huawei_fleet import (FLEET_DEVICE_COUNT, FLEET_SIZE_LABEL, READ_POINTS, STATUS_VALUES, STATUS_WORD_VALUES,
+                           UNIMPLEMENTED_CONTROLS, build_fleet, compare_point, point_expected)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class HuaweiFleetRun:
         self.copy_source = None
         self.source_point_configuration = None
         self.addresses = sorted({point.address for point in READ_POINTS} | {30075})
-        desktop.metadata["华为六路拓扑"] = self.buses
+        desktop.metadata["华为机群拓扑"] = self.buses
         desktop.metadata["华为遥控缺口"] = list(UNIMPLEMENTED_CONTROLS)
         desktop.metadata["华为验收范围"] = "本次创建的机群连接对 slaveSim 驱动工况的抄读匹配"
 
@@ -255,9 +255,9 @@ class HuaweiFleetRun:
 
     def assert_complete(self):
         failed = [item for item in self.results if not item["通过"]]
-        expected_count = 21 * len(STAGES)
+        expected_count = FLEET_DEVICE_COUNT * len(STAGES)
         if len(self.results) != expected_count or failed:
-            raise AssertionError(f"华为21台机群未全部通过：完成{len(self.results)}/{expected_count}项设备工况，失败{len(failed)}项；详见huawei-fleet-results.md")
+            raise AssertionError(f"华为 {FLEET_SIZE_LABEL} 机群未全部通过：完成{len(self.results)}/{expected_count}项设备工况，失败{len(failed)}项；详见huawei-fleet-results.md")
 
     @staticmethod
     def failure_description(result):
@@ -266,7 +266,7 @@ class HuaweiFleetRun:
 
     def write_report(self):
         completed = len(self.results)
-        total = 21 * len(STAGES)
+        total = FLEET_DEVICE_COUNT * len(STAGES)
         failed = [item for item in self.results if not item["通过"]]
         devices, channels = [], []
         for bus in self.buses:
@@ -279,15 +279,16 @@ class HuaweiFleetRun:
                 devices.append({"路号": bus["index"], "站号": device["station_id"], "完成工况": len(records), "全部匹配": passed})
             channels.append({"路号": bus["index"], "设备数": len(bus["devices"]), "通过设备": passed_devices})
         passed_devices = sum(int(item["全部匹配"]) for item in devices)
-        self.desktop.metadata["华为验收汇总"] = {"声明观察设备": len(self.connections), "计划设备": 21,
+        self.desktop.metadata["华为验收汇总"] = {"声明观察设备": len(self.connections), "计划设备": FLEET_DEVICE_COUNT,
                                                  "已完成工况": completed, "计划工况": total, "失败工况": len(failed),
                                                  "通过设备": passed_devices, "逐路": channels, "逐台": devices,
-                                                 "全部抄通": len(self.connections) == 21 and completed == total and passed_devices == 21}
+                                                 "全部抄通": len(self.connections) == FLEET_DEVICE_COUNT
+                                                 and completed == total and passed_devices == FLEET_DEVICE_COUNT}
         report = {"拓扑": self.buses, "汇总": self.desktop.metadata["华为验收汇总"],
                   "未验证控制": list(UNIMPLEMENTED_CONTROLS), "设备工况结果": self.results}
         (self.desktop.artifacts / "huawei-fleet-results.json").write_text(
             json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-        lines = ["# 华为六路21台抄读匹配结果", "", f"设备工况完成：{completed}/{total}，失败：{len(failed)}。",
+        lines = [f"# 华为 {FLEET_SIZE_LABEL} 抄读匹配结果", "", f"设备工况完成：{completed}/{total}，失败：{len(failed)}。",
                  "", "范围：本次创建的机群连接对 slaveSim 工况的 DSP 抄读匹配。DSP 下发调节及 104 遥控未验证。",
                  "40200/40201启停遥控：模型未实现，未发送命令，不计为通过。", "",
                  "| 路号 | 设备数 | 全部工况匹配设备数 |", "| --- | --- | --- |"]
