@@ -146,25 +146,25 @@ def test_forget_password_clears_saved_password_and_auto_login(login_memory, requ
 @session_plan(
     *login_steps("initial", auto=True),
     *logout_steps("logout"),
-    *form_steps("logout_form", remember=True, auto=True, filled=True),
+    *form_steps("logout_form", remember=True, auto=False, filled=True),
     capture("explicit-logout-login-form",
             "主动退出后的登录表单",
-            "保留原账号和掩码密码，记住密码和下次自动登录均勾选，停留在登录页",
-            "已验证原账号和密码回填、密码保持掩码、两项仍勾选，且停留在登录页"),
+            "回填原账号和掩码密码，仅「记住密码」保持勾选，停留在登录页",
+            "已验证原账号和密码回填、密码保持掩码、仅「记住密码」勾选，且仍停留在登录页"),
     reopen("reopen"),
-    *workspace_steps("reopened_workspace", compare_badge=True),
+    *form_steps("reopened_form", remember=True, auto=False, filled=True),
     capture("explicit-logout-after-reopen",
-            "主动退出后重开自动进入原账号工作台",
-            "重开后无需填表或点击登录，自动进入原账号工作台",
-            "重开后未操作登录表单，已验证工作台及退出入口可见，账号与退出前一致"),
+            "主动退出后重开的登录表单",
+            "重开后回填原账号和掩码密码，仅「记住密码」保持勾选，等待手动登录",
+            "重开后已验证原账号和密码回填、密码保持掩码、仅「记住密码」勾选，且仍停留在登录页"),
 )
 @execution_logic("""
-1. 在独立副本中勾选「下次自动登录」，确认「记住密码」联动勾选，用正确账号密码登录并记录工作台账号。
-2. 在工作台主动退出并确认，等待登录表单同步。核对原账号和掩码密码已回填、两项选项仍勾选，页面持续停留在登录页。保存截图。
-3. 正常关闭并重开同一副本，不操作登录表单，直接等待工作台。核对退出入口可见、账号与退出前一致，保存工作台截图。
+1. 在独立副本中勾选「下次自动登录」，确认「记住密码」联动勾选，用正确账号密码登录并进入工作台。
+2. 在工作台主动退出并确认。核对原账号和掩码密码已回填、「记住密码」仍勾选、「下次自动登录」已取消勾选，页面持续停留在登录页。保存截图。
+3. 正常关闭并重开同一副本，不操作登录表单。再次核对账号和掩码密码回填、仅「记住密码」勾选，确认登录页持续等待手动登录。保存截图。
 """)
-def test_explicit_logout_preserves_auto_login_after_reopen(login_memory, request):
-    """主动退出后重开仍自动登录"""
+def test_explicit_logout_disables_auto_login_but_keeps_password(login_memory, request):
+    """主动退出后重开需手动登录"""
     run_case_plan(request, login_memory)
 
 
