@@ -64,6 +64,47 @@ def parse_visible_value(text):
 
 
 class HuaweiRtuPage(ModbusRtuPage):
+    def copy_connection(self, source, name, serial_device, station_id):
+        self.select(source)
+        source_config = self.owned[source]
+        copy_name = f"{source}_copy"
+        copy_button = (By.XPATH, "//button[@aria-label=" + xpath_text(f"复制连接 {source}") + "]")
+        copies = (By.XPATH, "//button[@aria-label=" + xpath_text(f"复制连接 {copy_name}")
+                  + " or starts-with(@aria-label," + xpath_text(f"复制连接 {copy_name}_") + ")]")
+        with self.desktop.step("确认华为副本及目标连接名称未被占用", actual=[copy_name, name]):
+            if (self.driver.find_elements(*copies) or self.driver.find_elements(*self._connection_locator(name))
+                    or copy_name in self.owned or name in self.owned):
+                raise AssertionError("华为副本或目标连接名称已存在，拒绝覆盖")
+
+        self.pending_creation = copy_name
+        self._click(copy_button, f"复制本例华为 RTU 连接 {source}")
+        conn_id = self._read_connection_identity(copy_name, "读取华为连接副本身份")
+        if any(conn_id == link["conn_id"] for link in self.owned.values()):
+            raise AssertionError(f"华为连接副本 {copy_name} 的编号与已登记连接重复")
+        copy = {"name": copy_name, "conn_id": conn_id,
+                "fields": {**source_config["fields"], "conn_name": copy_name},
+                "options": dict(source_config["options"]),
+                "points": {tag: dict(point) for tag, point in source_config["points"].items()}}
+        self.owned[copy_name] = copy
+        self.current = copy_name
+        self.pending_creation = None
+        self.desktop.metadata.setdefault("本例RTU连接", []).append(
+            {"name": copy_name, "conn_id": conn_id, "复制来源": source, "目标名称": name, "清理状态": "待清理"})
+
+        stopped = (By.XPATH, "//div[contains(@class,'modbus-connection-card')]"
+                   "//div[contains(@class,'ant-card-head-title')]"
+                   "//span[contains(@class,'ant-tag') and normalize-space(.)='已停止']")
+        self.desktop.check("确认华为连接副本处于停止状态", bool(self._visible(stopped)), True)
+        self._click(self._button("编辑配置", "//div[contains(@class,'modbus-connection-card')]"), "编辑华为连接副本")
+        fields = {"conn_name": name, "serial_device": serial_device, "device_id": station_id}
+        for field, value in fields.items():
+            self._fill(field, value, field)
+        copy["pending_name"] = name
+        self._submit("保存修改")
+        self._record_connection_rename(copy_name, name)
+        copy["fields"].update(fields)
+        self.assert_saved_connection()
+
     def add_huawei_point(self, spec, tag):
         point = normalize_point(spec)
         if not isinstance(tag, str) or not tag.strip() or len(tag) > 128:
@@ -105,12 +146,7 @@ class HuaweiRtuPage(ModbusRtuPage):
         self._menu("模块运维")
         self._rtu()
         self.select(name)
-        self._click(self._button("编辑配置", "//div[contains(@class,'modbus-connection-card')]"), "重新读取华为连接配置")
-        for field, expected in self.owned[name]["fields"].items():
-            self._assert_input(field, expected)
-        for field, expected in self.owned[name]["options"].items():
-            self._assert_select(field, expected)
-        self._close_check_dialog()
+        self.assert_saved_connection()
         for tag, point in self.owned[name]["points"].items():
             locator = (By.XPATH, "//button[@aria-label=" + xpath_text("编辑点位 " + tag) + "]")
             self._click(locator, f"重新读取华为点位 {tag}")
@@ -134,14 +170,24 @@ class HuaweiRtuPage(ModbusRtuPage):
             self._close_check_dialog()
         LOGGER.info("华为连接及点表重新读取核对完成：%s，点数=%s", name, len(self.owned[name]["points"]))
 
+    def assert_saved_connection(self):
+        self._assert_identity()
+        config = self.owned[self.current]
+        self._click(self._button("编辑配置", "//div[contains(@class,'modbus-connection-card')]"), "重新读取华为连接配置")
+        for field, expected in config["fields"].items():
+            self._assert_input(field, expected)
+        for field, expected in config["options"].items():
+            self._assert_select(field, expected)
+        self._close_check_dialog()
+
     def _close_check_dialog(self):
         self._click(self._button("取消", self.DIALOG_XPATH), "关闭华为配置核对窗口")
         self._until(lambda _: not self._visible(self.DIALOG), "核对窗口未关闭")
 
-    def _read_visible_rows(self):
+    def _read_point_table_rows(self):
         # PointTable当前pagination=false，按同一DOM任务读取全部行；不访问React或接口缓存。
         table = self.driver.find_element(By.CSS_SELECTOR, ".protocol-point-card .ant-table-container")
-        rows = self.driver.execute_script("""
+        return self.driver.execute_script("""
             const root = arguments[0];
             const headers = [...root.querySelectorAll('thead th')].map(n => n.innerText.trim());
             return [...root.querySelectorAll('tbody tr[data-row-key]')].map(row => ({
@@ -149,6 +195,34 @@ class HuaweiRtuPage(ModbusRtuPage):
                 cells: [...row.querySelectorAll('td')].map(n => n.innerText.trim()), headers
             }));
         """, table)
+
+    def read_point_configuration(self):
+        """整表回读复制前后的可见配置，避免逐个重开副本点位编辑框。"""
+        self._assert_identity()
+        card = "//div[contains(@class,'protocol-point-card')]"
+        config_view = (By.XPATH, card + "//label[normalize-space(.)='配置视图']")
+        choice = self._until(lambda _: self._visible(config_view), "华为点表未显示配置视图")
+        if "ant-segmented-item-selected" not in (choice.get_attribute("class") or ""):
+            self._click(config_view, "显示华为点表配置视图")
+        show_fields = self._button("显示工程量/字节序", card)
+        if self._visible(show_fields):
+            self._click(show_fields, "显示华为点表工程量和字节序")
+        expected_tags = set(self.owned[self.current]["points"])
+        with self.desktop.step(f"整表回读华为连接 {self.current} 的点位配置", expected=f"{len(expected_tags)} 个点位"):
+            rows = self._until(lambda _: self._read_point_table_rows(), "华为配置点表未显示任何点位")
+            configuration = {}
+            for row in rows:
+                tag = row["tag"]
+                fields = dict(zip(row["headers"], row["cells"]))
+                assert tag not in configuration, f"华为配置点表 Tag 重复：{tag}"
+                assert {"标签", "地址", "功能码", "寄存器数", "BOOL 解析", "数据类型", "缩放系数",
+                        "偏移量", "死区", "字序", "字节序"} <= fields.keys(), "华为配置点表列不完整"
+                configuration[tag] = {label: value for label, value in fields.items() if label != "操作"}
+            self.desktop.check("核对华为点表全部标签", sorted(configuration), sorted(expected_tags))
+            return configuration
+
+    def _read_visible_rows(self):
+        rows = self._read_point_table_rows()
         observed_at = datetime.now().astimezone().isoformat(timespec="milliseconds")
         values = {}
         for row in rows:

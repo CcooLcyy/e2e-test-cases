@@ -28,6 +28,8 @@ class HuaweiFleetRun:
         # 执行时准备的实际总线名称和站号优先，不能重新生成假名称覆盖发现结果。
         self.buses = build_fleet(config, run_id) if buses is None else buses
         self.connections, self.results, self.previous, self.evidence_errors = {}, [], {}, []
+        self.copy_source = None
+        self.source_point_configuration = None
         self.addresses = sorted({point.address for point in READ_POINTS} | {30075})
         desktop.metadata["华为六路拓扑"] = self.buses
         desktop.metadata["华为遥控缺口"] = list(UNIMPLEMENTED_CONTROLS)
@@ -53,16 +55,28 @@ class HuaweiFleetRun:
     def create_device(self, bus, device):
         station = device["station_id"]
         name = f"e2e-huawei-{self.run_id}-r{bus['index']}-s{station}"
-        tags = {point.key: f"{name}-{point.key}" for point in READ_POINTS}
+        tags = {point.key: f"{self.copy_source or name}-{point.key}" for point in READ_POINTS}
         self.desktop.check(f"创建前核对第{bus['index']}路的实际设备和固定配置路径",
                            self.simulator.observe_bus_paths(bus["name"]),
                            (bus["serial_device"], bus["link_path"]))
-        self.upper.create_connection(name, bus["serial_device"], self.config.baud_rate, 8, 1, "N", station,
-                                     self.config.poll_interval_ms)
-        for point in READ_POINTS:
-            self.upper.add_huawei_point(replace(point, address=device["point_addresses"][point.key]), tags[point.key])
+        if self.copy_source is None:
+            self.upper.create_connection(name, bus["serial_device"], self.config.baud_rate, 8, 1, "N", station,
+                                         self.config.poll_interval_ms)
+            for point in READ_POINTS:
+                self.upper.add_huawei_point(replace(point, address=device["point_addresses"][point.key]), tags[point.key])
+            self.upper.assert_saved_configuration()
+            self.source_point_configuration = self.upper.read_point_configuration()
+        else:
+            self.desktop.check("确认华为复制源点表与本台模拟寄存器地址一致",
+                               {key: self.source_point_configuration[tag]["地址"] for key, tag in tags.items()},
+                               {key: str(address) for key, address in device["point_addresses"].items()})
+            self.upper.copy_connection(self.copy_source, name, bus["serial_device"], station)
+            self.desktop.check("核对华为连接副本的可见点表与首台一致", self.upper.read_point_configuration(),
+                               self.source_point_configuration)
         self.upper.start()
         self.connections[self._identity(bus, device)] = {"name": name, "tags": tags}
+        if self.copy_source is None:
+            self.copy_source = name
 
     def apply_stage(self, stage):
         for bus in self.buses:

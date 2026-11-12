@@ -139,8 +139,12 @@ def _prepare_device_step(route, station):
         bus = fleet.buses[route - 1]
         fleet.create_device(bus, bus["devices"][station - 1])
 
-    return Step(f"fleet.prepare.route-{route}.station-{station}", f"新建第{route}路站号{station}的 RTU 连接",
-                f"本例专用连接使用 slaveSim 实际设备，保存 {len(READ_POINTS)} 个采集点并启动轮询", prepare,
+    first = (route, station) == (1, 1)
+    action = "新建" if first else "复制并配置"
+    expected = (f"按实际串口和站号创建连接，录入并回读 {len(READ_POINTS)} 个点后启动轮询" if first else
+                f"复制首条连接，保存本台连接名、串口和站号，回读 {len(READ_POINTS)} 个点后启动轮询")
+    return Step(f"fleet.prepare.route-{route}.station-{station}", f"{action}第{route}路站号{station}的 RTU 连接",
+                expected, prepare,
                 group="准备本例 RTU 连接")
 
 
@@ -186,7 +190,7 @@ BUSINESS_STEPS = (
 )
 @execution_logic(f"""
 1. 登录上位机并连接现场下位机。清除 slaveSim 原有总线，重建六路分别含 1 至 6 台华为逆变器的模拟总线。固定每台的可用直流功率和电压，关闭扰动。保存应用后从运行页读取各路实际设备（/dev/pts/N），核对固定配置路径，检查已有连接是否占用实际设备，并读取各台站号和寄存器地址。
-2. 按 slaveSim 实际设备、站号和寄存器地址，在上位机为 21 台设备各建一条 RTU 连接，配置 {len(READ_POINTS)} 个采集点并启动轮询。寄存器 32000 配置为发电、待机和限电停运三个 BOOL 位点，32089 配置为 UINT16 设备状态码。
+2. 按 slaveSim 实际设备、站号和寄存器地址，在上位机创建首条 RTU 连接并逐点录入 {len(READ_POINTS)} 个采集点，保存后回读配置。寄存器 32000 配置为发电、待机和限电停运三个 BOOL 位点，32089 配置为 UINT16 设备状态码。其余 20 台通过上位机复制首条连接，修改并回读各自的连接名、实际串口和站号，核对点表与首台一致。每条连接核对后启动轮询。
 3. 从初始发电开始，通过 slaveSim 切换有功调节、正无功、负无功、待机、限电停运和恢复发电。每台每轮先按预定工况核对源端的电压、功率、功率因数和状态（含 32000 原始整字值），再与上位机的 {len(READ_POINTS)} 个采集点对照。核对换算、状态位、地址、功能码和正常质量，有变化的点还需更新时间。
 4. 147 项设备工况均须在各自时限内达到预期并保存双端证据。记录逐次采样、双端截图和汇总报告，失败时保留现场。停止并删除本例连接，清空 slaveSim 总线并回读确认。
 """)

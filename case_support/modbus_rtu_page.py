@@ -225,13 +225,38 @@ class ModbusRtuPage:
     def _selected_conn_id(self):
         return self.owned[self.current]["conn_id"]
 
+    def _read_connection_identity(self, name, action):
+        self._click(self._connection_locator(name), action)
+        title = (By.XPATH, "//div[contains(@class,'modbus-connection-card')]"
+                 "//div[contains(@class,'ant-card-head-title')]//span[normalize-space(.)=" + xpath_text(name) + "]")
+        self._until(lambda _: self._visible(title), f"RTU 连接详情未切换到 {name}")
+
+        def visible_id(_):
+            conn_id = self._detail("连接编号")
+            return conn_id if conn_id.isdecimal() and int(conn_id) > 0 else False
+
+        return self._until(visible_id, f"未取得 RTU 连接 {name} 的编号")
+
     def select(self, name):
         if name not in self.owned:
             raise RuntimeError("拒绝选择非本例创建的连接")
-        self._click(self._connection_locator(name), f"选择本例 RTU 连接 {name}")
-        self._until(lambda _: name in self.driver.find_element(By.CSS_SELECTOR, ".modbus-connection-card .ant-card-head").text)
+        if self._read_connection_identity(name, f"选择本例 RTU 连接 {name}") != self.owned[name]["conn_id"]:
+            raise RuntimeError("RTU连接编号已变化，拒绝操作其他连接")
         self.current = name
-        self._assert_identity()
+
+    def _record_connection_rename(self, old_name, new_name):
+        connection = self.owned[old_name]
+        conn_id = self._read_connection_identity(new_name, f"确认本例 RTU 连接改名为 {new_name}")
+        if conn_id != connection["conn_id"]:
+            raise RuntimeError(f"改名后的 RTU 连接 {new_name} 编号不符，拒绝接管")
+        connection["name"] = new_name
+        connection["fields"]["conn_name"] = new_name
+        connection.pop("pending_name", None)
+        self.owned[new_name] = self.owned.pop(old_name)
+        for identity in self.desktop.metadata.get("本例RTU连接", []):
+            if identity["name"] == old_name and identity["conn_id"] == conn_id:
+                identity["name"] = new_name
+        self.current = new_name
 
     def create_connection(self, name, serial_device, baud_rate, data_bits, stop_bits, parity,
                           station_id, poll_interval_ms, address_base=0, read_timeout_ms=1000):
@@ -260,13 +285,7 @@ class ModbusRtuPage:
         self._until(lambda _: not self._visible(self.DIALOG), "创建连接未成功，配置窗口仍然打开")
         self._until(lambda _: self._visible(self._connection_locator(name)), "创建后连接列表未显示本例连接")
         # 创建成功且名称已在提交前确认未占用，随后读取设备分配的编号作为清理凭据。
-        self._click(self._connection_locator(name), "读取新建连接身份")
-        self._until(lambda _: name in self.driver.find_element(By.CSS_SELECTOR, ".modbus-connection-card .ant-card-head").text)
-        def visible_id(_):
-            conn_id = self._detail("连接编号")
-            return conn_id if conn_id.isdecimal() and int(conn_id) > 0 else False
-
-        conn_id = self._until(visible_id, "未取得新建连接的编号")
+        conn_id = self._read_connection_identity(name, "读取新建连接身份")
         self.owned[name] = {"name": name, "conn_id": conn_id, "fields": expected, "options": options, "points": {}}
         self.pending_creation = None
         self.desktop.metadata.setdefault("本例RTU连接", []).append({"name": name, "conn_id": conn_id, "清理状态": "待清理"})
@@ -422,6 +441,10 @@ class ModbusRtuPage:
                 try:
                     with self.desktop.step(f"清理本例 RTU 连接 {name}", cancellable=False):
                         self._rtu()
+                        pending_name = self.owned[name].get("pending_name")
+                        if pending_name and not self._visible(self._connection_locator(name)):
+                            self._record_connection_rename(name, pending_name)
+                            name = pending_name
                         self.select(name)
                         self.stop()
                         self._assert_identity()
