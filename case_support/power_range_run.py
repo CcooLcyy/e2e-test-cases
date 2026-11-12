@@ -26,15 +26,21 @@ from .slavesim_page import SlaveSimPage
 
 
 class PowerRangeSimulator(SlaveSimPage):
+    def _station_editor(self, name):
+        station = self._unique(self._config_bus(name).find_elements(
+            By.CSS_SELECTOR, ":scope > details.slave-editor"), "本例模拟从站")
+        self._open(station)
+        return station
+
     def prepare(self, name, initial, check_paths):
         before = self._prepare_empty_configuration("功率场景准备前")
         draft, link = self._add_default_bus(replace_before=before)
         self._replace(self._field(self._config_bus(draft), "总线名称"), name)
         self._add_basic_stations(name, 1)
-        station = self._unique(self._config_bus(name).find_elements(
-            By.CSS_SELECTOR, ":scope > details.slave-editor"), "本例模拟从站")
-        self._open(station)
+        station = self._station_editor(name)
         station.find_element(By.XPATH, "./button[normalize-space(.)='新增寄存器']").click()
+        # 新增寄存器会重绘配置区，需要重新定位从站。
+        station = self._station_editor(name)
         group = station.find_element(By.CSS_SELECTOR, ":scope > details.register-group")
         self._open(group)
         registers = group.find_elements(By.CSS_SELECTOR, ":scope > details.register-editor")
