@@ -105,7 +105,7 @@ class HuaweiFleetRun:
         reactive = Decimal(registers[32082]["value"]) / 1000
         pf = Decimal(registers[32084]["value"]) / 1000
         errors = []
-        # 按协议分辨率容纳取整；逐点双端比较仍使用1e-6绝对误差。
+        # 源端工况按协议分辨率核对；逐点比对按上位机显示精度进行。
         phase_voltage = Decimal(device["grid_line_voltage_v"]) / Decimal(3).sqrt()
         for address in (32069, 32070, 32071):
             if abs(Decimal(registers[address]["value"]) / 10 - phase_voltage) > Decimal("0.1"):
@@ -297,6 +297,6 @@ class HuaweiFleetRun:
             counts = Counter(point["通过"] for point in item["点位"])
             error = self.failure_description(item).replace("|", "\\|").replace("\n", " ")
             lines.append(f"| {item['路号']} | {item['站号']} | {item['工况']} | {counts[True]}/{len(READ_POINTS)} | {'通过' if item['通过'] else '失败'} | {error} |")
-        lines.extend(["", "逐点原始值、期望、实际、差值、质量和时间见 [完整对照](huawei-fleet-results.json)。",
+        lines.extend(["", "逐点原始值、换算期望、显示期望、上位机实际值、相对换算期望的差值、质量和时间见 [完整对照](huawei-fleet-results.json)。",
                       "每台各工况的采样过程保存在 huawei-samples-*.json，截图路径记录在完整对照中。"])
         (self.desktop.artifacts / "huawei-fleet-results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

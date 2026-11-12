@@ -1,6 +1,6 @@
 """华为六路21台固定拓扑、点表及独立双端验收规则。"""
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from testbench.modbus_rtu_config import decimal_value
@@ -93,9 +93,10 @@ def point_expected(point, raw):
 
 
 def compare_point(point, before, after, upper, *, expected_raw=None, previous_timestamp=None):
-    """两端源值在采样窗口不变时严格核对；错误逐点记录供汇总。"""
+    """源值稳定时按运行表显示精度核对，保留原始换算结果。"""
     errors = []
     expected = None
+    display_expected = None
     actual = upper.get("value")
     difference = None
     try:
@@ -108,9 +109,13 @@ def compare_point(point, before, after, upper, *, expected_raw=None, previous_ti
             if type(actual) is not bool or actual != expected:
                 errors.append("BOOL状态与模拟器状态字不匹配")
         else:
-            difference = decimal_value(actual) - expected
-            if abs(difference) > Decimal("0.000001"):
-                errors.append("上位机工程量与原始值换算结果不匹配")
+            display_expected = expected.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if display_expected.is_zero():
+                display_expected = display_expected.copy_abs()
+            actual_value = decimal_value(actual)
+            difference = actual_value - expected
+            if actual_value != display_expected:
+                errors.append("上位机工程量与两位小数显示期望不匹配")
         if upper.get("quality") != "正常":
             errors.append("上位机质量不是正常")
         timestamp = str(upper.get("timestamp") or "").strip()
@@ -123,6 +128,7 @@ def compare_point(point, before, after, upper, *, expected_raw=None, previous_ti
     return {"点名": point.name, "点标识": point.key, "地址": point.address, "类型": point.data_type,
             "倍率": point.scale, "位索引": point.bit_index, "单位": point.unit,
             "模拟器前值": before, "模拟器后值": after, "换算期望": str(expected),
+            "显示期望": str(display_expected) if display_expected is not None else "",
             "上位机实际": actual, "差值": str(difference) if difference is not None else "",
             "质量": upper.get("quality"), "时间": upper.get("timestamp"),
             "通过": not errors, "错误": errors}
