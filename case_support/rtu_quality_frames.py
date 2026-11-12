@@ -28,6 +28,18 @@ def capture_frames(master):
             master._check_stop()
             direction = row.find_elements(By.TAG_NAME, "td")[1].text.strip()
             select = row.find_element(By.CSS_SELECTOR, 'button[aria-controls="frame-detail"]')
+            # 固定表头占据滚动区顶部，将按钮移到表头下方的可见区域。
+            driver.execute_script(
+                """
+                const [table, button] = arguments;
+                const viewport = table.parentElement;
+                const header = table.querySelector('thead th').getBoundingClientRect();
+                const buttonRect = button.getBoundingClientRect();
+                const visibleCenter = (header.bottom + viewport.getBoundingClientRect().bottom) / 2;
+                viewport.scrollTop += buttonRect.top + buttonRect.height / 2 - visibleCenter;
+                """,
+                table, select,
+            )
             select.click()
             master.wait_for(
                 lambda: select.get_dom_attribute("aria-pressed") == "true",

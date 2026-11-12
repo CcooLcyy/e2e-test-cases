@@ -422,7 +422,11 @@ class ModbusRtuPage:
                 ActionChains(self.driver).move_to_element(target).perform()
                 self._until(lambda driver: not any(item.is_displayed() for item in driver.find_elements(*tooltip)),
                             "删除连接的悬停提示未消失")
-        self._click(self._button("确定", popup), step)
+        self._click_popconfirm(popup, step)
+
+    def _click_popconfirm(self, popup, step):
+        confirm = "//*[contains(@class,'ant-popconfirm-buttons')]/button[contains(@class,'ant-btn-primary')]"
+        self._click((By.XPATH, popup + confirm), step)
 
     def cleanup(self):
         """协作取消时仍清理；身份不符时停止，不删除未知连接。"""

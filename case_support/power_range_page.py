@@ -230,5 +230,5 @@ class PowerRangePage(AgcDirectionPage):
         popup = ("//div[contains(@class,'ant-popover') and not(contains(@class,'hidden'))]"
                  "[.//*[contains(@class,'ant-popconfirm-title') and starts-with(normalize-space(.),"
                  + xpath_text(f"确认删除 {self.group_name}？") + ")]]")
-        self._click(self._button("确定", popup), "确认删除本例控制组及关联路由")
+        self._click_popconfirm(popup, "确认删除本例控制组及关联路由")
         self._until(lambda _: self._group_item(self.group_name) is None, "本例控制组未删除")
