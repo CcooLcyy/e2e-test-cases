@@ -52,30 +52,36 @@ def _configure_expiry(page, dialog, *, verify=False):
     assert field.get_property("value") == expected, f"量测有效期应为 {expected}，实际为 {field.get_property('value')}"
 
 
-def _prepare_rtu(context):
+def prepare_control_rtu(context, specs, *, deferred=(), slow_intervals=None):
+    """读回模拟器资源并建立对应 RTU 连接，可推迟指定连接启动轮询。"""
     context.sim_started = True
     context.rtu.open_current_links()
-    context.points = context.simulator.prepare(
-        context.name, SCENARIOS[context.module], context.rtu.assert_serial_paths_available)
+    context.points = context.simulator.prepare(context.name, specs, context.rtu.assert_serial_paths_available)
     context.connections = {}
+    intervals = slow_intervals or {}
     for role, points in context.points.items():
         point = points[0]
         name = f"{context.name}-{role}"
         context.rtu.create_connection(name, point["actual_device"], 9600, 8, 1, "N", point["station_id"],
-                                      SLOW_POLL * 1000 if role == context.slow else 1000)
+                                      intervals.get(role, 1000))
         context.rtu.add_point("measured", address=point["address"])
         if len(points) == 2:
             context.rtu.add_point("setpoint", function=6, address=points[1]["address"])
         context.rtu.assert_saved_configuration()
         context.connections[role] = name
-        if role == context.fast:
+        if role not in deferred:
             context.rtu.start()
             context.rtu.wait_value("measured", point["value"], 0, context.timeout)
 
 
+def _prepare_rtu(context):
+    prepare_control_rtu(context, SCENARIOS[context.module], deferred=(context.slow,),
+                        slow_intervals={context.slow: SLOW_POLL * 1000})
+
+
 def _prepare_group(context):
     if context.module == "AGC":
-        result = context.group.create_expiry_group(context.name, context.connections, configure_expiry=_configure_expiry)
+        result = context.group.create_communication_group(context.name, context.connections, configure_expiry=_configure_expiry)
         context.target_tag = result["command_tag"]
     else:
         context.target_tag = f"{context.name}-voltage-target"
