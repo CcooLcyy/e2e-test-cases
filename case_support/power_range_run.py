@@ -116,7 +116,8 @@ def _prepare_group(context):
 def _prepare_iec104(context):
     context.port = context.iec104.create()
     for tag in context.remote_tags:
-        context.ioas[tag] = context.iec104.import_point(context.name, tag, tag, module=context.module)
+        destination = f"{context.name}-104-{tag}"
+        context.ioas[tag] = context.iec104.import_point(context.name, tag, destination, module=context.module)
     assert len(set(context.ioas.values())) == len(context.remote_tags), f"IEC104 IOA 重复：{context.ioas}"
     context.iec104.check_routes()
     context.iec104.start()
