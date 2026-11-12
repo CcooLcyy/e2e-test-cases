@@ -272,21 +272,27 @@ def expiry_plan(module):
 
 
 def _cleanup(context, request, failure):
+    metadata = context.desktop.metadata
+    upper_failed = False
     try:
         with track_fixture_step(request, UPPER_CLEANUP):
             errors = []
             context.rtu._cleaning = True
             try:
-                for cleanup in (context.group.cleanup, context.iec104.cleanup, context.rtu.cleanup):
+                for label, cleanup in (("IEC104 连接", context.iec104.cleanup),
+                                       (f"{context.module} 控制组", context.group.cleanup),
+                                       ("RTU 连接", context.rtu.cleanup)):
                     try:
                         cleanup()
                     except Exception as error:
-                        errors.append(str(error))
+                        errors.append(f"{label}：{error}")
             finally:
                 context.rtu._cleaning = False
             if errors:
+                metadata.setdefault("测试资源清理错误", []).extend(errors)
                 raise RuntimeError("；".join(errors))
     except Exception as error:
+        upper_failed = True
         if failure is None:
             raise
         failure.add_note(f"控制组或链路清理失败：{error}")
@@ -296,9 +302,11 @@ def _cleanup(context, request, failure):
                 with track_fixture_step(request, SIM_CLEANUP):
                     context.simulator.clear_all_buses()
             except Exception as error:
-                if failure is None:
+                metadata.setdefault("测试资源清理错误", []).append(f"{SIM_CLEANUP.action}：{error}")
+                if failure is None and not upper_failed:
                     raise
-                failure.add_note(f"模拟总线清理失败：{error}")
+                if failure is not None:
+                    failure.add_note(f"模拟总线清理失败：{error}")
 
 
 def run_expiry_case(request, module):

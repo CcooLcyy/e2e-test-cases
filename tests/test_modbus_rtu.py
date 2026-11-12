@@ -1,5 +1,5 @@
 """通过 DSP 上位机验证 RTU 配置，通过 slaveSim 验证采集。"""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import asdict
 from datetime import datetime
 import json
@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from selenium.webdriver.support import expected_conditions as EC
 
 from testbench.case_plan import (
     DESKTOP_FINISH, DESKTOP_START, SITE_CONNECT, SLAVESIM_BROWSER_READY, Step, case_plan,
@@ -308,7 +309,7 @@ def _rtu_session(request, *, station_count=1):
                         upper.cleanup()
                 except Exception as error:
                     cleanup_failure = error
-                    desktop.metadata["RTU连接清理错误"] = str(error)
+                    desktop.metadata.setdefault("测试资源清理错误", []).append(f"{RTU_CLEANUP.action}：{error}")
                     LOGGER.exception("RTU连接清理失败")
                     if not had_failure:
                         capture_failure(simulator)
@@ -318,7 +319,7 @@ def _rtu_session(request, *, station_count=1):
                         simulator.clear_all_buses()
                 except Exception as error:
                     cleanup_failure = cleanup_failure or error
-                    desktop.metadata["slaveSim清理错误"] = str(error)
+                    desktop.metadata.setdefault("测试资源清理错误", []).append(f"{SIMULATOR_CLEANUP.action}：{error}")
                     LOGGER.exception("slaveSim 总线清理失败")
             if cleanup_failure is not None and not had_failure:
                 raise cleanup_failure
@@ -351,12 +352,37 @@ def configuration_rtu(request):
         if context.upper.creation_started:
             with track_fixture_step(request, CONFIGURATION_CLEANUP):
                 try:
-                    if not context.site_connected or desktop.driver is None:
-                        raise RuntimeError(f"现场直连不可用，请检查本例连接 {context.name} 是否仍存在")
-                    context.upper.cleanup()
+                    cleanup_scope = getattr(desktop, "cleanup_scope", nullcontext)
+                    with cleanup_scope():
+                        if not context.site_connected or desktop.driver is None:
+                            restore_configuration_site(context)
+                        context.upper.cleanup()
                 except Exception as error:
-                    desktop.metadata["RTU连接清理错误"] = str(error)
-                    raise
+                    message = f"{CONFIGURATION_CLEANUP.action} {context.name}：{error}"
+                    desktop.metadata.setdefault("测试资源清理错误", []).append(message)
+                    raise RuntimeError(message) from error
+
+
+def restore_configuration_site(context):
+    desktop, page = context.desktop, context.page
+    with desktop.step("恢复本例现场直连以清理 RTU 连接", cancellable=False):
+        if desktop.driver is None:
+            reopen = getattr(desktop, "reopen_for_cleanup", None)
+            if reopen is None:
+                raise RuntimeError("当前测试运行器无法重新打开本例上位机副本")
+            reopen()
+
+        def login_state(driver):
+            if EC.visibility_of_any_elements_located(page.LOGOUT)(driver):
+                return "workspace"
+            if EC.visibility_of_any_elements_located(page.SCREEN)(driver) and page._ready(driver):
+                return "login"
+            return False
+
+        state = desktop.wait.until(login_state, "重开的上位机未显示可用的登录页或工作台")
+        if state == "login":
+            page.login(context.account)
+        connect_configuration_site(context)
 
 
 def connect_configuration_site(context):

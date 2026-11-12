@@ -1,29 +1,26 @@
 """通过 DSP 上位机建立 AVC 周期用例的专用控制组。"""
 
-import re
 import time
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
-from .modbus_rtu_page import ModbusRtuPage, xpath_text
+from .control_group_page import AVC_CREATE_NOTICE, AVC_MEMBER_NAMES, GROUP_LIST, ROUTE_ALERT, ControlGroupPage
+from .modbus_rtu_page import xpath_text
 
 
 GROUP = "//div[@role='dialog' and contains(@class,'control-group-modal')]"
 MEMBER = "//div[@role='dialog' and contains(@class,'control-member-modal')]"
-GROUP_LIST = ("//div[contains(@class,'ant-card')][./div[contains(@class,'ant-card-head')]"
-              "//*[normalize-space(.)='控制组列表']]")
 SUMMARY = "//div[contains(@class,'control-summary-card')]"
 RUNTIME = "//div[contains(@class,'control-runtime-card')]"
-ROUTE_ALERT = ("//*[contains(concat(' ',normalize-space(@class),' '),' ant-alert ')]"
-               "[.//*[normalize-space(text())='控制组配置已保存，映射尚未同步完成']]")
 MODE_LABELS = {"voltage": "目标电压模式", "q_total": "总无功模式"}
 
 
-class AvcPeriodPage(ModbusRtuPage):
+class AvcPeriodPage(ControlGroupPage):
     def __init__(self, desktop):
         super().__init__(desktop)
         self.group_name = None
+        self.member_name = None
         self.conn_id = None
         self.group_draft_opened = False
         self.group_submitted = False
@@ -40,22 +37,8 @@ class AvcPeriodPage(ModbusRtuPage):
                         f"AVC 页签未选中：{label}")
         self._until(lambda _: self._visible((By.XPATH, GROUP_LIST)), "AVC 控制组列表未显示")
 
-    def _refresh_groups(self):
-        locator = (By.XPATH, GROUP_LIST + "//div[contains(@class,'ant-card-extra')]//button")
-        self._click(locator, "刷新 AVC 控制组列表")
-        self._until(lambda _: (button := self._visible(locator)) and button.is_enabled()
-                    and "ant-btn-loading" not in (button.get_attribute("class") or ""), "AVC 控制组列表未完成刷新")
-
     def _group_item(self):
-        return self._visible((By.XPATH, GROUP_LIST + "//li[.//span[normalize-space(.)="
-                              + xpath_text(self.group_name) + "]]"))
-
-    @staticmethod
-    def _item_identity(item):
-        match = re.search(r"conn_id=([1-9]\d*)\s*\|", item.text)
-        if not match:
-            raise AssertionError(f"AVC 控制组连接编号不可读：{item.text}")
-        return int(match[1])
+        return self._control_group_item(self.group_name)
 
     def _read_summary(self, label):
         locator = (By.XPATH, SUMMARY + "//*[contains(@class,'ant-descriptions-item-label')"
@@ -78,11 +61,14 @@ class AvcPeriodPage(ModbusRtuPage):
             raise RuntimeError("本例 AVC 控制组尚未确认连接编号")
         self._open_groups()
         item = self._until(lambda _: self._group_item(), "未找到本例 AVC 控制组")
-        if self._item_identity(item) != self.conn_id:
+        if self._group_identity(item) != self.conn_id:
             raise AssertionError(f"本例 AVC 控制组身份已变化：{item.text}")
+        self._select_group_item(item, self.conn_id)
+
+    def _select_group_item(self, item, conn_id):
         item.click()
         self._until(lambda _: self._read_summary("控制组名称") == self.group_name
-                    and self._read_summary("连接 ID") == str(self.conn_id),
+                    and self._read_summary("连接 ID") == str(conn_id),
                     "AVC 组配置未切换至本例控制组")
 
     def _fill_field(self, root, name, value):
@@ -153,13 +139,13 @@ class AvcPeriodPage(ModbusRtuPage):
                      member_name="inverter", q_min=0, q_max=100, rtu_target_tag=None,
                      voltage_connection=None, configure_expiry=None):
         self._open_groups()
-        self._refresh_groups()
-        self.group_name = group_name
+        self._refresh_control_groups("AVC")
+        self.group_name, self.member_name = group_name, member_name
         if self._group_item():
             raise AssertionError(f"现场已存在同名 AVC 控制组：{group_name}")
-        self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例 AVC 控制组")
         self.group_draft_opened = True
-        self._click(self._button("我已了解，继续新增", self.DIALOG_XPATH), "确认新增 AVC 控制组")
+        self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例 AVC 控制组")
+        self._click(self._button("我已了解，继续新增", AVC_CREATE_NOTICE), "确认新增 AVC 控制组")
         self._fill_field(GROUP, "group_name", group_name)
         self._choose(GROUP, "id", "command_mode", MODE_LABELS[mode])
         self._choose(GROUP, "id", "control_mode", "周期直分配")
@@ -190,25 +176,26 @@ class AvcPeriodPage(ModbusRtuPage):
         self._bind_member("无功设定点", rtu_connection, q_setpoint_tag)
         self._click(self._button("确认成员", MEMBER), "确认本例 AVC 成员")
         self._wait_draft_closed(MEMBER, "AVC 成员草稿未确认")
-        self._click(self._button("保存控制组并建立路由", GROUP), "保存本例 AVC 控制组与路由")
-        self.group_submitted = True
-        self._wait_draft_closed(GROUP, "AVC 控制组与路由未保存")
-        self.group_draft_opened = False
-        item = self._until(lambda _: self._group_item(), "新建 AVC 控制组未显示")
-        self.conn_id = self._item_identity(item)
+        with self._finish_group_save():
+            self.group_submitted = True
+            self._click(self._button("保存控制组并建立路由", GROUP), "保存本例 AVC 控制组与路由")
+            self._wait_draft_closed(GROUP, "AVC 控制组与路由未保存")
+            self.group_draft_opened = False
+            item = self._until(lambda _: self._group_item(), "新建 AVC 控制组未显示")
+            self.conn_id = self._group_identity(item)
+            self.desktop.metadata["本例 AVC 控制组"] = {
+                "组名": group_name, "连接编号": self.conn_id, "电压量测": voltage_tag,
+                "目标命令": target_tag, "成员": member_name, "无功量测": q_measurement_tag,
+                "无功设定": q_setpoint_tag, "RTU 连接": rtu_connection,
+            }
         self._select_owned()
         self._check_route_save()
         if configure_expiry is not None:
-            self._click(self._button("编辑", SUMMARY), "重新打开 AVC 控制组读回量测有效期")
             self.group_draft_opened = True
+            self._click(self._button("编辑", SUMMARY), "重新打开 AVC 控制组读回量测有效期")
             configure_expiry(self, GROUP, verify=True)
             self._discard_draft(GROUP, "取消")
             self.group_draft_opened = False
-        self.desktop.metadata["本例 AVC 控制组"] = {
-            "组名": group_name, "连接编号": self.conn_id, "电压量测": voltage_tag,
-            "目标命令": target_tag, "成员": member_name, "无功量测": q_measurement_tag,
-            "无功设定": q_setpoint_tag, "RTU 连接": rtu_connection,
-        }
         self.desktop.check("核对 AVC 命令模式", self._read_summary("命令模式"), MODE_LABELS[mode])
         self.desktop.check("核对 AVC 控制方式", self._read_summary("控制方式"), "周期直分配")
         self.desktop.check("核对 AVC 命令点", self._read_summary("命令点"), target_tag)
@@ -246,16 +233,17 @@ class AvcPeriodPage(ModbusRtuPage):
         self._select_owned()
         state = self._until(self._known_state, "修改周期前 AVC 控制组未显示明确状态")
         self.desktop.check("核对修改周期前 AVC 已停止", state, "已停止")
-        self._click(self._button("编辑", SUMMARY), "编辑本例 AVC 控制组周期")
         self.group_draft_opened = True
+        self._click(self._button("编辑", SUMMARY), "编辑本例 AVC 控制组周期")
         self._set_period_fields(calculation_period, command_period)
         with self.desktop.step("保存新的 AVC 控制周期"):
             locator = self._button("保存控制组并建立路由", GROUP)
             button = self._until(lambda _: self._ready_button(locator), "AVC 周期保存按钮不可用")
-            saved_at = clock()
-            button.click()
-            self._wait_draft_closed(GROUP, "AVC 新周期未保存")
-        self.group_draft_opened = False
+            with self._finish_group_save():
+                saved_at = clock()
+                button.click()
+                self._wait_draft_closed(GROUP, "AVC 新周期未保存")
+                self.group_draft_opened = False
         self._select_owned()
         self._check_route_save()
         self._assert_periods(calculation_period, command_period)
@@ -264,51 +252,42 @@ class AvcPeriodPage(ModbusRtuPage):
         return saved_at if state == "运行中" else None
 
     def _discard_draft(self, root, cancel):
-        if not self._visible((By.XPATH, root)):
-            return
-        self._click(self._button(cancel, root), "关闭本例 AVC 配置草稿")
-        discard = self._button("放弃改动", self.DIALOG_XPATH)
-
-        def closed_or_confirm(_):
-            return self._visible(discard) or not self._visible((By.XPATH, root))
-
-        result = self._until(closed_or_confirm, "AVC 草稿未关闭，也未显示放弃确认")
-        if result is not True:
-            self._click(discard, "放弃本例 AVC 未保存改动")
-            self._wait_draft_closed(root, "AVC 草稿未关闭")
+        title = "放弃未暂存的成员改动？" if root == MEMBER else "放弃未保存的控制组改动？"
+        self._close_control_draft(root, cancel, title, "放弃改动")
 
     def cleanup(self):
+        if not self.group_draft_opened and not self.group_submitted:
+            return
         self._cleaning = True
         try:
-            if self.group_draft_opened:
-                notice = self.DIALOG_XPATH + "[.//*[normalize-space(text())='新增 AVC 控制组前请确认']]"
-                if self._visible((By.XPATH, notice)):
-                    self._click(self._button("取消", notice), "关闭本例 AVC 新增确认窗口")
-                    self._wait_draft_closed(notice, "AVC 新增确认窗口未关闭")
-                self._discard_draft(MEMBER, "取消编辑")
-                self._discard_draft(GROUP, "取消")
-                self.group_draft_opened = False
-            if not self.group_submitted:
-                return
-            self._open_groups()
-            if self.conn_id is None:
-                self._refresh_groups()
-                item = self._group_item()
-                if item is None:
+            with self.desktop.step(f"清理本例 AVC 控制组 {self.group_name}", cancellable=False):
+                if self.group_draft_opened:
+                    self._wait_group_save_idle(GROUP)
+                    if self._visible((By.XPATH, AVC_CREATE_NOTICE)):
+                        self._click(self._button("取消", AVC_CREATE_NOTICE), "关闭本例 AVC 新增确认窗口")
+                        self._wait_draft_closed(AVC_CREATE_NOTICE, "AVC 新增确认窗口未关闭")
+                    self._discard_draft(MEMBER, "取消编辑")
+                    self._discard_draft(GROUP, "取消")
+                    self.group_draft_opened = False
+                if not self.group_submitted:
                     return
-                self.conn_id = self._item_identity(item)
-            self.stop()
-            # 页面要求先处理部分保存留下的路由，才能删除已创建的组。
-            pending = self._visible((By.XPATH, ROUTE_ALERT))
-            if pending:
-                if f"AVC / {self.group_name}：" not in pending.text:
-                    raise RuntimeError(f"待同步路由无法确认属于本例 AVC 控制组：{pending.text}")
-                self._click(self._button("仅重试映射", ROUTE_ALERT), "清理前解除本例控制组的映射同步锁定")
-                self._until(lambda _: not self._visible((By.XPATH, ROUTE_ALERT)),
-                            "本例映射同步仍失败，上位机禁止删除控制组")
-            self._click(self._button("删除", SUMMARY), "删除本例 AVC 控制组")
-            self._confirm(f"确认删除 {self.group_name}？", "确认删除本例 AVC 控制组")
-            self._until(lambda _: not self._group_item(), "本例 AVC 控制组未删除")
-            self.group_submitted = False
+                self._open_groups()
+                self._refresh_control_groups("AVC")
+                item = self._group_item()
+                if item is not None:
+                    conn_id = self._group_identity(item)
+                    if self.conn_id is not None and conn_id != self.conn_id:
+                        raise RuntimeError(f"待清理 AVC 控制组连接编号已变化：{conn_id}，本例为 {self.conn_id}")
+                    self._select_group_item(item, conn_id)
+                    if self.conn_id is None:
+                        members = [node.text for node in self.driver.find_elements(By.XPATH, AVC_MEMBER_NAMES) if node.is_displayed()]
+                        if members != [self.member_name]:
+                            raise RuntimeError(f"无法确认待清理 AVC 控制组的专用成员：{members}")
+                        self.conn_id = conn_id
+                    self._finish_owned_routes("AVC", self.group_name)
+                    self._delete_owned_group("AVC", self.group_name, self.conn_id, SUMMARY)
+                self.group_submitted = False
+        except Exception as error:
+            raise RuntimeError(f"AVC 控制组 {self.group_name} 清理失败：{error}") from error
         finally:
             self._cleaning = False

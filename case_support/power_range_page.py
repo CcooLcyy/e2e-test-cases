@@ -1,17 +1,15 @@
 """通过正常业务界面建立专用 AGC 或 AVC 组并检查全站点值。"""
 
-import re
-
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 
 from .agc_direction_page import AgcDirectionPage, parse_decimal, unique_match
+from .control_group_page import AGC_MEMBER_NAMES, AVC_CREATE_NOTICE, AVC_MEMBER_NAMES, GROUP_LIST
 from .modbus_rtu_page import xpath_text
 
 
 GROUP = "//div[@role='dialog' and contains(@class,'control-group-modal')]"
 MEMBER = "//div[@role='dialog' and contains(@class,'control-member-modal')]"
-LIST = "//div[contains(@class,'ant-card')][./div[contains(@class,'ant-card-head')]//*[normalize-space(.)='控制组列表']]"
 AVC_SUMMARY = "//div[contains(@class,'control-summary-card')]"
 
 
@@ -22,6 +20,8 @@ class PowerRangePage(AgcDirectionPage):
         self.group_name = name
         self.conn_id = None
         self.submitted = False
+        self.draft_opened = False
+        self.member_name = None
         self.active = module == "AGC"
         self.runtime = "//section[@aria-label='AGC 功率总览']" if self.active else "//div[contains(@class,'control-runtime-card')]"
 
@@ -31,7 +31,7 @@ class PowerRangePage(AgcDirectionPage):
             tab = (By.XPATH, "//*[@aria-label='控制页面切换']//*[@role='tab'][normalize-space(.)="
                    + xpath_text(label) + "]")
             self._click(tab, f"打开 {self.module} {label} 页签")
-        self._until(lambda _: self._visible((By.XPATH, LIST)), f"{self.module} 控制组列表未显示")
+        self._until(lambda _: self._visible((By.XPATH, GROUP_LIST)), f"{self.module} 控制组列表未显示")
 
     def _field_value(self, root, field, value):
         locator = (By.XPATH, root + "//input[@id=" + xpath_text(field) + "]")
@@ -73,10 +73,13 @@ class PowerRangePage(AgcDirectionPage):
 
     def create_group(self, connection, lower, upper):
         self.open_groups()
+        self._refresh_control_groups(self.module)
         assert self._group_item(self.group_name) is None, f"已有同名控制组 {self.group_name}"
-        self._click(self._button("+ 新增控制组", LIST), "新增本例控制组")
+        self.member_name = connection
+        self.draft_opened = True
+        self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例控制组")
         if not self.active:
-            self._click(self._button("我已了解，继续新增", self.DIALOG_XPATH), "确认新增 AVC 控制组")
+            self._click(self._button("我已了解，继续新增", AVC_CREATE_NOTICE), "确认新增 AVC 控制组")
         self._field_value(GROUP, "group_name", self.group_name)
         if self.active:
             self._open_agc_members()
@@ -98,23 +101,31 @@ class PowerRangePage(AgcDirectionPage):
             self._bind("无功设定点", connection, "power-setpoint")
         self._click(self._button("确认成员", MEMBER), "确认本例成员")
         self._until(lambda _: not self._visible((By.XPATH, MEMBER)), "成员配置尚未确认")
-        self._click(self._button("保存控制组并建立路由", GROUP), "保存本例控制组和成员路由")
-        self.submitted = True
-        self._until(lambda _: not self._visible((By.XPATH, GROUP)), "控制组和成员路由尚未保存")
-        item = self._until(lambda _: self._group_item(self.group_name), "未找到新建控制组")
-        identity = re.search(r"conn_id=([1-9]\d*)\s*\|", item.text)
-        assert identity, f"本例控制组缺少连接编号：{item.text}"
-        self.conn_id = int(identity[1])
-        self.desktop.metadata["本例控制组"] = {"模块": self.module, "组名": self.group_name, "连接编号": self.conn_id}
+        with self._finish_group_save():
+            self.submitted = True
+            self._click(self._button("保存控制组并建立路由", GROUP), "保存本例控制组和成员路由")
+            self._until(lambda _: not self._visible((By.XPATH, GROUP)), "控制组和成员路由尚未保存")
+            self.draft_opened = False
+            item = self._until(lambda _: self._group_item(self.group_name), "未找到新建控制组")
+            self.conn_id = self._group_identity(item)
+            self.desktop.metadata["本例控制组"] = {"模块": self.module, "组名": self.group_name, "连接编号": self.conn_id}
 
     def open_owned(self, view="控制策略"):
         self.open_groups(view)
         item = self._until(lambda _: self._group_item(self.group_name), "未找到本例控制组")
-        assert self.conn_id and f"conn_id={self.conn_id} |" in item.text, f"本例控制组连接身份不符：{item.text}"
+        assert self.conn_id and self._group_identity(item) == self.conn_id, f"本例控制组连接身份不符：{item.text}"
+        self._select_group_item(item, view)
+
+    def _select_group_item(self, item, view):
         item.click()
         if view == "控制策略":
-            root = self.runtime if self.active else AVC_SUMMARY
-            selected = (By.XPATH, root + "//*[normalize-space(text())=" + xpath_text(self.group_name) + "]")
+            if self.active:
+                path = self.runtime + "//h4[normalize-space(.)=" + xpath_text(self.group_name) + "]"
+            else:
+                path = (AVC_SUMMARY + "//*[contains(@class,'ant-descriptions-item-label') and normalize-space(.)='控制组名称']"
+                        "/following-sibling::*[contains(@class,'ant-descriptions-item-content')][1][normalize-space(.)="
+                        + xpath_text(self.group_name) + "]")
+            selected = (By.XPATH, path)
             self._until(lambda _: self._visible(selected), "当前控制组详情尚未切换到本例")
         else:
             self._until(lambda _: (selected := self._group_item(self.group_name))
@@ -131,21 +142,22 @@ class PowerRangePage(AgcDirectionPage):
         self.open_owned()
         self._click(self._button("停止控制组", self.runtime), "停止本例控制组以调整配置上限")
         if self.active:
-            popup = ("//div[contains(@class,'ant-popover') and not(contains(@class,'hidden'))]"
-                     "[.//*[normalize-space(.)='确认停止该控制组？']]")
-            self._click(self._button("停止控制组", popup), "确认停止本例 AGC 组")
+            self._click(self._group_confirmation_button("确认停止该控制组？", "停止控制组"), "确认停止本例 AGC 组")
         self._until(lambda _: "已停止" in self._group_item(self.group_name).text, "本例控制组未停止")
         root = self.runtime if self.active else AVC_SUMMARY
+        self.draft_opened = True
         self._click(self._button("编辑", root), "编辑本例控制组")
         if self.active:
             self._open_agc_members()
-        action = f"编辑成员 {self.group_name}" if self.active else f"编辑 {self.group_name}"
+        action = f"编辑成员 {self.member_name}" if self.active else f"编辑 {self.member_name}"
         self._click((By.XPATH, GROUP + "//button[@aria-label=" + xpath_text(action) + "]"), "编辑本例成员")
         self._field_value(MEMBER, "max_kw_decimal" if self.active else "q_max_kvar", upper)
         self._click(self._button("确认成员", MEMBER), "确认新的成员上限")
         self._until(lambda _: not self._visible((By.XPATH, MEMBER)), "成员上限尚未确认")
-        self._click(self._button("保存控制组并建立路由", GROUP), "保存本例成员上限")
-        self._until(lambda _: not self._visible((By.XPATH, GROUP)), "成员上限尚未保存")
+        with self._finish_group_save():
+            self._click(self._button("保存控制组并建立路由", GROUP), "保存本例成员上限")
+            self._until(lambda _: not self._visible((By.XPATH, GROUP)), "成员上限尚未保存")
+            self.draft_opened = False
         self.start_group()
 
     def wait_station_values(self, expected, timeout):
@@ -207,28 +219,52 @@ class PowerRangePage(AgcDirectionPage):
         return "未显示"
 
     def cleanup_group(self):
-        for root, label in ((MEMBER, "取消编辑"), (GROUP, "取消")):
-            if not self._visible((By.XPATH, root)):
-                continue
-            self._click(self._button(label, root), "关闭本例配置窗口")
-            discard = self._button("放弃草稿" if self.active else "放弃改动", self.DIALOG_XPATH)
-            self._until(lambda _: self._visible(discard) or not self._visible((By.XPATH, root)), "未显示草稿放弃确认")
-            if self._visible(discard):
-                self._click(discard, "放弃本例未保存配置")
-            self._until(lambda _: not self._visible((By.XPATH, root)), "本例配置窗口未关闭")
-        if not self.submitted:
+        if not self.draft_opened and not self.submitted:
             return
-        self.open_owned()
+        self._cleaning = True
+        try:
+            with self.desktop.step(f"清理本例 {self.module} 控制组 {self.group_name}", cancellable=False):
+                if self.draft_opened:
+                    self._wait_group_save_idle(GROUP)
+                    self._discard_group_drafts()
+                    self.draft_opened = False
+                if not self.submitted:
+                    return
+                self.open_groups()
+                self._refresh_control_groups(self.module)
+                item = self._group_item(self.group_name)
+                if item is not None:
+                    conn_id = self._group_identity(item)
+                    if self.conn_id is not None and conn_id != self.conn_id:
+                        raise RuntimeError(f"待清理控制组连接编号已变化：{conn_id}，本例为 {self.conn_id}")
+                    self._select_group_item(item, "控制策略")
+                    if self.conn_id is None:
+                        locator = (By.CSS_SELECTOR, AGC_MEMBER_NAMES) if self.active else (By.XPATH, AVC_MEMBER_NAMES)
+                        members = [node.text for node in self.driver.find_elements(*locator) if node.is_displayed()]
+                        if members != [self.member_name]:
+                            raise RuntimeError(f"无法确认待清理控制组的专用成员：{members}")
+                        self.conn_id = conn_id
+                    self._finish_owned_routes(self.module, self.group_name)
+                    if self.active:
+                        details = (By.XPATH, self.runtime + "//*[@role='button'][.//*[normalize-space(.)='配置与点位详情']]")
+                        panel = self._until(lambda _: self._visible(details), "本例控制组详情未显示")
+                        if panel.get_attribute("aria-expanded") != "true":
+                            self._click(details, "展开本例控制组详情")
+                    root = self.runtime if self.active else AVC_SUMMARY
+                    self._delete_owned_group(self.module, self.group_name, self.conn_id, root)
+                self.submitted = False
+        except Exception as error:
+            raise RuntimeError(f"{self.module} 控制组 {self.group_name} 清理失败：{error}") from error
+        finally:
+            self._cleaning = False
+
+    def _discard_group_drafts(self):
         if self.active:
-            details = (By.XPATH, self.runtime + "//*[@role='button'][.//*[normalize-space(.)='配置与点位详情']]")
-            panel = self._until(lambda _: self._visible(details), "本例控制组详情未显示")
-            if panel.get_attribute("aria-expanded") != "true":
-                self._click(details, "展开本例控制组详情")
-        root = self.runtime if self.active else AVC_SUMMARY
-        button = "重试删除" if "待删除" in self._group_item(self.group_name).text else "删除"
-        self._click(self._button(button, root), "删除本例控制组")
-        popup = ("//div[contains(@class,'ant-popover') and not(contains(@class,'hidden'))]"
-                 "[.//*[contains(@class,'ant-popconfirm-title') and starts-with(normalize-space(.),"
-                 + xpath_text(f"确认删除 {self.group_name}？") + ")]]")
-        self._click_popconfirm(popup, "确认删除本例控制组及关联路由")
-        self._until(lambda _: self._group_item(self.group_name) is None, "本例控制组未删除")
+            self._close_control_draft(MEMBER, "取消编辑", "放弃未完成的成员编辑？", "放弃草稿")
+            self._close_control_draft(GROUP, "取消", "放弃未保存的控制组草稿？", "放弃草稿")
+        else:
+            if self._visible((By.XPATH, AVC_CREATE_NOTICE)):
+                self._click(self._button("取消", AVC_CREATE_NOTICE), "关闭本例 AVC 新增确认窗口")
+                self._until(lambda _: not self._visible((By.XPATH, AVC_CREATE_NOTICE)), "AVC 新增确认窗口未关闭")
+            self._close_control_draft(MEMBER, "取消编辑", "放弃未暂存的成员改动？", "放弃改动")
+            self._close_control_draft(GROUP, "取消", "放弃未保存的控制组改动？", "放弃改动")

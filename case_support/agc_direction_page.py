@@ -8,7 +8,8 @@ import time
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.by import By
 
-from .modbus_rtu_page import ModbusRtuPage, xpath_text
+from .control_group_page import ControlGroupPage
+from .modbus_rtu_page import xpath_text
 
 
 LOGGER = logging.getLogger(__name__)
@@ -107,7 +108,7 @@ def _direction_point_acceptable(point):
     return point["quality"] == "有效" and issues <= {"无", "数据陈旧"}
 
 
-class AgcDirectionPage(ModbusRtuPage):
+class AgcDirectionPage(ControlGroupPage):
     """只读已有专用组，接管身份后不创建、修改或删除被测配置。"""
 
     def __init__(self, desktop):
@@ -144,7 +145,7 @@ class AgcDirectionPage(ModbusRtuPage):
             self._click((By.XPATH, root + "//*[@role='tab'][normalize-space(.)=" + xpath_text(label) + "]"), f"切换 AGC {label} 页签")
 
     def _group_item(self, group_name):
-        return self._visible((By.XPATH, "//div[contains(@class,'ant-card')][./div[contains(@class,'ant-card-head')]//*[normalize-space(.)='控制组列表']]//li[contains(@class,'ant-list-item')][.//span[normalize-space(.)=" + xpath_text(group_name) + "]]"))
+        return self._control_group_item(group_name)
 
     def select_group(self, group_name, expected_conn_id=None):
         self._control_view("控制策略")

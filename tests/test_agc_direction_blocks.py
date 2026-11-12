@@ -211,7 +211,7 @@ def _cleanup(context, request, failure):
         except Exception as error:
             errors.append(f"{step.action}：{error}")
     if errors:
-        context.desktop.metadata["AGC 用例清理错误"] = errors
+        context.desktop.metadata.setdefault("测试资源清理错误", []).extend(errors)
         if failure is None:
             _capture_failure(context)
             raise RuntimeError("；".join(errors))

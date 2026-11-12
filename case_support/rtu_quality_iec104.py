@@ -14,8 +14,11 @@ class RtuQualityIec104:
         self.upper = upper
         self.name = name
         self.port = None
+        self.endpoint = None
+        self.originator_address = None
         self.requested = False
         self.confirmed = False
+        self.creation_conflict = None
         self.routes = []
 
     def _button(self, text, root, action):
@@ -42,30 +45,40 @@ class RtuQualityIec104:
         return self.upper._visible((By.XPATH, self.CARD + "//td[.//*[contains(@class,'ant-descriptions-item-label') and normalize-space(.)="
                                     + xpath_text(label) + "]]//*[contains(@class,'ant-descriptions-item-content')]"))
 
+    def _field(self, field):
+        locator = (By.XPATH, self.LINK_DIALOG + "//input[@id=" + xpath_text(field) + "]")
+        return self.upper._until(lambda _: self.upper._visible(locator), f"IEC104 配置字段 {field} 未显示")
+
     def _fill(self, field, value):
-        element = self.upper._until(lambda _: self.upper._visible((By.XPATH, self.LINK_DIALOG + "//input[@id=" + xpath_text(field) + "]")))
-        self.upper._replace(element, value)
+        self.upper._replace(self._field(field), value)
 
     def _assert_link(self):
-        endpoint = self._description("本地端点")
-        ca = self._description("公共地址 (CA)")
+        for label, expected in (("本地端点", self.endpoint), ("公共地址 (CA)", "1"),
+                                ("源地址 (OA)", self.originator_address)):
+            field = self._description(label)
+            actual = field.text.strip() if field else None
+            if actual != expected:
+                raise RuntimeError(f"IEC104 链路 {self.name} 的{label}不符，预期 {expected}，实际 {actual}")
         role = self._description("站点角色")
-        assert endpoint and endpoint.text.strip().rpartition(":")[2] == str(self.port), "IEC104 连接端口与本例配置不符"
-        assert ca and ca.text.strip() == "1", "IEC104 连接公共地址与本例配置不符"
-        assert role and "被控站" in role.text, "IEC104 连接不是被控站"
+        if not role or "被控站" not in role.text:
+            raise RuntimeError(f"IEC104 链路 {self.name} 的站点角色与本例被控站配置不符")
+
+    def _track_creation(self):
+        self.upper.desktop._check_stop()
+        self.requested = True
+
+    def _creation_window_closed(self):
+        self.creation_conflict = self.upper._creation_conflict(self.LINK_DIALOG)
+        if self.creation_conflict:
+            raise RuntimeError(f"IEC104 链路 {self.name} 创建发生冲突：{self.creation_conflict}")
+        return not self.upper._visible((By.XPATH, self.LINK_DIALOG))
 
     def create(self):
         self._open()
-        refresh = (By.CSS_SELECTOR, 'button[aria-label="刷新连接列表"]')
-        self.upper._click(refresh, "刷新既有 IEC104 链路")
-        self.upper._until(lambda _: (button := self.upper._visible(refresh)) and button.is_enabled()
-                          and "ant-btn-loading" not in (button.get_attribute("class") or ""), "IEC104 链路列表未完成刷新")
-        alert = self.upper._visible((By.XPATH, "//div[contains(@class,'iec104-page-alert')][.//*[normalize-space(.)='连接列表刷新失败']]"))
-        if alert:
-            raise AssertionError(f"未读取到 IEC104 既有端口，停止创建：{alert.text}")
+        self.upper._refresh_connection_list("IEC104", "iec104-page-alert")
+        if self.upper.driver.find_elements(*self.upper._connection_locator(self.name)):
+            raise AssertionError(f"存在同名 IEC104 链路 {self.name}，拒绝接管")
         names = [item.text.strip() for item in self.upper.driver.find_elements(By.CSS_SELECTOR, ".protocol-connection-item-main strong")]
-        if self.name in names:
-            raise AssertionError("存在同名 IEC104 链路，拒绝接管")
         ports = set()
         for name in names:
             self._select_link(name)
@@ -78,16 +91,19 @@ class RtuQualityIec104:
         self._button("新增连接", "//div[contains(@class,'protocol-connection-list-card')]", "新增本例 IEC104 链路")
         self._fill("conn_name", self.name)
         self._fill("local_port", self.port)
+        local_ip = self._field("local_ip").get_attribute("value").strip()
+        self.endpoint = f"{local_ip}:{self.port}"
+        self.originator_address = self._field("oa").get_attribute("value").strip()
         time_switch = (By.XPATH, self.LINK_DIALOG + "//button[@id='point_with_time']")
         self.upper._click(time_switch, "启用 IEC104 带时标上送")
         self.upper._until(lambda _: self.upper._visible(time_switch).get_attribute("aria-checked") == "true", "带时标选项未启用")
         confirm = (By.XPATH, self.LINK_DIALOG + "//div[contains(@class,'ant-modal-footer')]//button[contains(@class,'ant-btn-primary')]")
-        self.upper._click(confirm, "保存本例 IEC104 链路")
-        self.requested = True
-        self.upper._until(lambda _: self.upper._visible(self.upper._connection_locator(self.name)), "保存后未显示本例 IEC104 链路")
-        self._select_link(self.name)
-        self._assert_link()
-        self.confirmed = True
+        with self.upper._defer_stop():
+            self.upper._click(confirm, f"保存本例 IEC104 链路 {self.name}", before_click=self._track_creation)
+            self.upper._until(lambda _: self._creation_window_closed(), f"IEC104 链路 {self.name} 的创建窗口仍然打开")
+            self._select_link(self.name)
+            self._assert_link()
+            self.confirmed = True
         return self.port
 
     def _choose(self, placeholder, query, text):
@@ -182,29 +198,65 @@ class RtuQualityIec104:
         self.upper._until(lambda _: (button := self.upper._visible(self.upper._button("断开", self.CARD))) and button.is_enabled(),
                           "专用 IEC104 链路未启动")
 
-    def cleanup(self):
-        if self.port is None:
-            return
+    def _discard_dialogs(self):
         for dialog in (self.IMPORT_DIALOG, self.LINK_DIALOG):
             locator = (By.XPATH, dialog)
+            if not self.upper._visible(locator):
+                continue
+            busy = (By.XPATH, dialog + "//*[contains(concat(' ',normalize-space(@class),' '),' ant-btn-loading ')]")
+            self.upper._until(lambda _: not self.upper._visible(busy), f"IEC104 链路 {self.name} 的配置提交未结束")
+            if dialog == self.LINK_DIALOG and self.requested and not self.confirmed and not self.creation_conflict:
+                self.creation_conflict = self.upper._creation_conflict(self.LINK_DIALOG)
             if not self.upper._visible(locator):
                 continue
             discard = self.upper._button("放弃草稿", dialog)
             close = (By.XPATH, dialog + "//button[contains(@class,'ant-modal-close')]")
             self.upper._click(discard if self.upper._visible(discard) else close, "关闭本例未提交的 IEC104 配置窗口")
             self.upper._until(lambda _: not self.upper._visible(locator), "本例 IEC104 配置窗口未关闭")
-        if not self.requested:
-            return
+
+    def _delete_link(self):
+        if self.creation_conflict:
+            raise RuntimeError(f"创建请求发生冲突，拒绝接管：{self.creation_conflict}")
         self._open()
+        self.upper._refresh_connection_list("IEC104", "iec104-page-alert")
         if not self.confirmed and not self.upper._visible(self.upper._connection_locator(self.name)):
-            raise RuntimeError(f"无法确认 IEC104 创建请求及其归属：{self.name}")
+            raise RuntimeError("刷新后未找到链路，无法确认创建请求结果及其归属")
         self._select_link(self.name)
         self._assert_link()
         stop = self.upper._visible(self.upper._button("断开", self.CARD))
         if stop and stop.is_enabled():
             self._button("断开", self.CARD, "断开本例 IEC104 链路")
             self.upper._confirm("确认断开连接？", "确认断开本例 IEC104 链路")
-            self.upper._until(lambda _: (button := self.upper._visible(self.upper._button("连接", self.CARD))) and button.is_enabled())
+            self.upper._until(lambda _: (button := self.upper._visible(self.upper._button("连接", self.CARD))) and button.is_enabled(),
+                              f"IEC104 链路 {self.name} 未断开")
+        self._assert_link()
         self.upper._click((By.XPATH, "//button[@aria-label=" + xpath_text(f"删除连接 {self.name}") + "]"), "删除本例 IEC104 链路")
-        self.upper._confirm(f"确认删除 {self.name}？", "确认删除本例 IEC104 链路")
+        self.upper._confirm(f"确认删除 {self.name}？", "确认删除本例 IEC104 链路", clear_delete_tooltip=True)
         self.upper._until(lambda _: not self.upper.driver.find_elements(*self.upper._connection_locator(self.name)), "本例 IEC104 链路未删除")
+        self.upper._refresh_connection_list("IEC104", "iec104-page-alert")
+        if self.upper.driver.find_elements(*self.upper._connection_locator(self.name)):
+            raise RuntimeError("刷新后仍存在同名链路，未确认删除结果")
+        self.requested = False
+
+    def cleanup(self):
+        if self.port is None:
+            return
+        was_cleaning = self.upper._cleaning
+        self.upper._cleaning = True
+        errors = []
+        try:
+            try:
+                if self.requested and not self.confirmed and not self.creation_conflict:
+                    self.creation_conflict = self.upper._creation_conflict(self.LINK_DIALOG)
+                self._discard_dialogs()
+            except Exception as error:
+                errors.append(f"关闭配置窗口失败：{getattr(error, 'msg', None) or error}")
+            if self.requested:
+                try:
+                    self._delete_link()
+                except Exception as error:
+                    errors.append(str(getattr(error, 'msg', None) or error))
+            if errors:
+                raise RuntimeError(f"IEC104 链路 {self.name} 清理失败：" + "；".join(errors))
+        finally:
+            self.upper._cleaning = was_cleaning

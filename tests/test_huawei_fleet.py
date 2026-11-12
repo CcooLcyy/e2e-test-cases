@@ -117,7 +117,7 @@ def huawei_fleet(request):
                             upper.cleanup()
                 except Exception as error:
                     cleanup_failure = error
-                    desktop.metadata["华为连接清理错误"] = str(error)
+                    desktop.metadata.setdefault("测试资源清理错误", []).append(f"{FLEET_CLEANUP.action}：{error}")
                     logging.getLogger(__name__).exception("华为连接清理失败")
                     capture_failure("上位机连接清理失败，清空模拟器前保留两端现场")
                 finally:
@@ -128,7 +128,7 @@ def huawei_fleet(request):
                         except Exception as error:
                             if cleanup_failure is None:
                                 cleanup_failure = error
-                            desktop.metadata["华为模拟器清理错误"] = str(error)
+                            desktop.metadata.setdefault("测试资源清理错误", []).append(f"{SIMULATOR_CLEANUP.action}：{error}")
                             logging.getLogger(__name__).exception("华为模拟器资源清理失败")
                 if cleanup_failure is not None and not (had_failure or sys.exc_info()[0] is not None):
                     raise cleanup_failure

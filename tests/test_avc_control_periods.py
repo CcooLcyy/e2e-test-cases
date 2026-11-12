@@ -236,20 +236,23 @@ RESTART = (
 def _cleanup(context, request, failure):
     errors = []
     with track_fixture_step(request, CLEANUP):
-        context.rtu._cleaning = True
         actions = [("IEC104", context.iec104.cleanup), ("AVC", context.avc.cleanup)]
         if context.rtu.creation_started:
             actions.append(("RTU", context.rtu.cleanup))
         if context.simulator_preparation_started:
             actions.append(("slaveSim", context.simulator.clear_all_buses))
-        for label, cleanup in actions:
-            try:
-                cleanup()
-            except Exception as error:
-                errors.append(f"{label} 清理失败：{error}")
+        context.rtu._cleaning = True
+        try:
+            for label, cleanup in actions:
+                try:
+                    cleanup()
+                except Exception as error:
+                    errors.append(f"{label} 清理失败：{error}")
+        finally:
+            context.rtu._cleaning = False
         if errors:
             message = "；".join(errors)
-            context.desktop.metadata["AVC清理错误"] = errors
+            context.desktop.metadata.setdefault("测试资源清理错误", []).extend(errors)
             if failure is not None:
                 failure.add_note(message)
             raise RuntimeError(message)

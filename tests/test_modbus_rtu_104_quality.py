@@ -345,7 +345,7 @@ def _cleanup(context, request, failure):
             _cleanup_upper(context)
     except BaseException as error:
         upper_failed = True
-        metadata.setdefault("RTU品质清理错误", []).append(f"{UPPER_CLEANUP.action}：{error}")
+        metadata.setdefault("测试资源清理错误", []).append(f"{UPPER_CLEANUP.action}：{error}")
         if failure is None:
             _capture_failure(context)
             raise
@@ -355,7 +355,7 @@ def _cleanup(context, request, failure):
                 with track_fixture_step(request, SIM_CLEANUP):
                     context.simulator.clear_all_buses()
             except BaseException as error:
-                metadata.setdefault("RTU品质清理错误", []).append(f"{SIM_CLEANUP.action}：{error}")
+                metadata.setdefault("测试资源清理错误", []).append(f"{SIM_CLEANUP.action}：{error}")
                 metadata["待核对的品质模拟资源"] = {
                     "固定配置路径": context.simulator.link_paths,
                     "实际设备": context.simulator.actual_devices,

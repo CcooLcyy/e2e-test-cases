@@ -4,6 +4,7 @@ from selenium.webdriver.common.by import By
 
 from .agc_direction_page import unique_match
 from .agc_direction_setup import AgcDirectionSetup
+from .control_group_page import ROUTE_ALERT
 from .modbus_rtu_page import xpath_text
 
 
@@ -55,9 +56,12 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         self._wait_dialog_closed(self.MEMBER_DIALOG, "确认成员")
 
     def _record_group(self, item):
-        self.group = dict(group_name=self.name, members=dict(self.members), conn_id=self._read_conn_id(item),
+        self.group = dict(group_name=self.name, members=dict(self.members), conn_id=self._group_identity(item),
                           lower_kw=10, upper_kw=100, cleanup="待清理")
         self.desktop.metadata["本例 AGC 控制组"] = self.group
+
+    def _expected_members(self):
+        return self.members
 
     def create_expiry_group(self, group_name, members, configure_expiry):
         """Bind each member to its own RTU link and return the saved group and command tag."""
@@ -68,7 +72,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         self.name = group_name
         self.members = dict(members)
         self._control_view("控制策略")
-        self._refresh_groups()
+        self._refresh_control_groups("AGC")
         if self._group_item(group_name):
             raise RuntimeError(f"AGC 已存在同名控制组：{group_name}")
 
@@ -76,8 +80,8 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             "组": group_name, "成员与 RTU 连接": self.members, "模式": "周期直分配，绝对值，等权",
             "成员容量及范围 kW": "100，10～100", "通信心跳超时毫秒": self.COMMUNICATION_TIMEOUT_MS,
         }):
-            self._click(self._button("+ 新增控制组", self.LIST), "新增专用 AGC 控制组")
             self._draft_opened = True
+            self._click(self._button("+ 新增控制组", self.LIST), "新增专用 AGC 控制组")
             self._fill_group_field(self.GROUP_DIALOG, "group_name", group_name)
             self._choose(self.GROUP_DIALOG, "control_mode", "周期直分配")
             self._choose(self.GROUP_DIALOG, "p_cmd_mode", "绝对值")
@@ -85,18 +89,13 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             self._members_tab()
             for member_name, connection_name in self.members.items():
                 self._add_member(member_name, connection_name, configure_expiry)
-            self._save_requested = True
-            self._click(self._button("保存控制组并建立路由", self.GROUP_DIALOG), "保存控制组及两条 RTU 链路的路由")
-            self._wait_dialog_closed(self.GROUP_DIALOG, "保存控制组")
-            self._draft_opened = False
-            item = self._until(lambda _: self._group_item(group_name), "保存后未显示本例 AGC 控制组")
-            self._record_group(item)
+            self._submit_group("保存控制组及两条 RTU 链路的路由")
 
         with self.desktop.step("读取已保存的 AGC 配置和实际点位"):
             overview = self._select_owned_group()
             self.desktop.check("核对 AGC 控制与分配模式", overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text,
                                "周期直分配 · 平均分配（等权） · 绝对值")
-            route_error = self._visible((By.XPATH, "//*[@role='alert'][.//*[normalize-space(.)='控制组配置已保存，映射尚未同步完成']]"))
+            route_error = self._visible((By.XPATH, ROUTE_ALERT))
             if route_error:
                 raise AssertionError("AGC 自动路由保存失败：" + route_error.text)
             self.group.update(self._read_point_specs())
@@ -142,7 +141,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         if self._selected_overview() is None:
             self.select_group(self.name, self.conn_id)
         item = self._group_item(self.name)
-        if item is None or self._read_conn_id(item) != self.conn_id:
+        if item is None or self._group_identity(item) != self.conn_id:
             raise RuntimeError("AGC 控制组身份在观察过程中变化")
         expand = (By.XPATH, self.OVERVIEW + "//button[@aria-label=" + xpath_text(f"展开成员 {name}") + "]")
         if self._visible(expand):
@@ -179,27 +178,3 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         """Read the AGC member measurement even when its value or quality is invalid."""
         values, details = self._member_runtime(name, "测量点")
         return dict(value=values["实测"], status=values["测量状态"], **details)
-
-    def cleanup(self):
-        if self._save_requested and self.group is None:
-            self._cleaning = True
-            try:
-                self._close_draft(self.MEMBER_DIALOG, "取消编辑")
-                self._close_draft(self.GROUP_DIALOG, "取消")
-                self._draft_opened = False
-                self._menu("数据总线")
-                self._control_view("控制策略")
-                self._refresh_groups()
-                item = self._group_item(self.name)
-                if item is None:
-                    self._save_requested = False
-                    return
-                item.click()
-                overview = self._until(lambda _: self._selected_overview(), "未能核对本例待清理 AGC 控制组")
-                members = [node.text for node in overview.find_elements(By.CSS_SELECTOR, ".agc-runtime-members tr[data-row-key] strong")]
-                if sorted(members) != sorted(self.members):
-                    raise RuntimeError(f"无法确认待清理组 {self.name} 的专用成员：{members}")
-                self._record_group(item)
-            finally:
-                self._cleaning = False
-        super().cleanup()

@@ -217,18 +217,22 @@ def _save_frames(master):
 def _cleanup(request, context, failure):
     errors = []
     upper = context.upper
+    metadata = context.desktop.metadata
     try:
         with track_fixture_step(request, UPPER_CLEANUP):
             upper._cleaning = True
             try:
-                for cleanup in (context.iec104.cleanup, upper.cleanup_group, upper.cleanup):
+                for label, cleanup in (("IEC104 连接", context.iec104.cleanup),
+                                       (f"{context.module} 控制组 {upper.group_name}", upper.cleanup_group),
+                                       ("RTU 连接", upper.cleanup)):
                     try:
                         cleanup()
                     except Exception as error:
-                        errors.append(str(error))
+                        errors.append(f"{label}：{error}")
             finally:
                 upper._cleaning = False
             if errors:
+                metadata.setdefault("测试资源清理错误", []).extend(errors)
                 raise RuntimeError(f"上位机资源清理失败：{errors}")
     except Exception as error:
         if failure is None:
@@ -241,6 +245,7 @@ def _cleanup(request, context, failure):
                 with track_fixture_step(request, SIM_CLEANUP):
                     context.simulator.clear_all_buses()
             except Exception as error:
+                metadata.setdefault("测试资源清理错误", []).append(f"{SIM_CLEANUP.action}：{error}")
                 if failure is None:
                     raise
                 failure.add_note(f"清空 slaveSim 失败：{error}")

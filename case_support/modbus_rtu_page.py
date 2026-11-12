@@ -1,4 +1,5 @@
 """通过真实桌面界面配置 RTU 并读取采集结果，仅清理本例创建的连接。"""
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 import logging
 
@@ -34,14 +35,29 @@ class ModbusRtuPage:
         self.creation_started = False
         self.pending_creation = None
         self._cleaning = False
+        self._stop_deferred = False
 
     @property
     def driver(self):
         return self.desktop.driver
 
+    @property
+    def _cancellable(self):
+        return not (self._cleaning or self._stop_deferred)
+
+    @contextmanager
+    def _defer_stop(self):
+        self.desktop._check_stop()
+        self._stop_deferred = True
+        try:
+            yield
+        finally:
+            self._stop_deferred = False
+        self.desktop._check_stop()
+
     def _until(self, predicate, message="", timeout=None):
         def probe(driver):
-            if not self._cleaning:
+            if self._cancellable:
                 self.desktop._check_stop()
             return predicate(driver)
         return WebDriverWait(self.driver, timeout or self.desktop.timeout,
@@ -53,15 +69,17 @@ class ModbusRtuPage:
             raise RuntimeError(f"界面定位不唯一，拒绝操作：{locator}")
         return matches[0] if matches else None
 
-    def _click(self, locator, name):
+    def _click(self, locator, name, *, before_click=None):
         def ready(_):
             element = self._visible(locator)
             if element and element.is_enabled() and element.get_attribute("aria-disabled") != "true":
                 return element
             return False
 
-        with self.desktop.step(name, cancellable=not self._cleaning):
+        with self.desktop.step(name, cancellable=self._cancellable):
             element = self._until(ready, f"控件未就绪：{name}")
+            if before_click:
+                before_click()
             element.click()
 
     @staticmethod
@@ -132,19 +150,24 @@ class ModbusRtuPage:
         self.desktop.metadata["现场直连实际地址"] = SITE_MANAGER_ADDRESS
         return SITE_MANAGER_ADDRESS
 
+    def _refresh_connection_list(self, protocol, alert_class):
+        refresh = (By.CSS_SELECTOR, 'button[aria-label="刷新连接列表"]')
+
+        def ready(_):
+            button = self._visible(refresh)
+            return button and button.is_enabled() and "ant-btn-loading" not in (button.get_attribute("class") or "")
+
+        self._until(ready, f"{protocol} 连接列表仍在加载或暂不可刷新")
+        self._click(refresh, f"刷新 {protocol} 连接列表")
+        self._until(ready, f"{protocol} 连接列表刷新未完成")
+        for alert in self.driver.find_elements(By.CSS_SELECTOR, f".{alert_class}"):
+            if alert.is_displayed() and "连接列表刷新失败" in alert.text:
+                raise RuntimeError(f"{protocol} 连接列表刷新失败：{alert.text}")
+
     def assert_serial_paths_available(self, paths):
         """创建连接前，只读检查目标串口是否被现有配置占用。"""
         with self.desktop.step("检查目标串口未被既有RTU连接使用"):
-            refresh = (By.CSS_SELECTOR, 'button[aria-label="刷新连接列表"]')
-            def ready(_):
-                button = self._visible(refresh)
-                return button and button.is_enabled() and "ant-btn-loading" not in (button.get_attribute("class") or "")
-            self._until(ready, "RTU连接列表仍在加载")
-            self._click(refresh, "只读刷新既有RTU连接列表")
-            self._until(ready, "RTU连接列表刷新未完成")
-            for alert in self.driver.find_elements(By.CSS_SELECTOR, ".modbus-page-alert"):
-                if alert.is_displayed() and "连接列表刷新失败" in alert.text:
-                    raise AssertionError("既有RTU连接列表刷新失败，不能确认测试串口空闲")
+            self._refresh_connection_list("RTU", "modbus-page-alert")
             names = [node.text.strip() for node in self.driver.find_elements(
                 By.CSS_SELECTOR, ".protocol-connection-item-main strong")]
             observed = []
@@ -204,8 +227,8 @@ class ModbusRtuPage:
             self._until(lambda _: self._visible(option), f"{name} 未找到可选项：{label}").click()
             self._until(lambda _: self._select_value(name) == label, f"{name} 未选中 {label}")
 
-    def _submit(self, text):
-        self._click(self._button(text, self.DIALOG_XPATH), f"提交{text}")
+    def _submit(self, text, *, before_click=None):
+        self._click(self._button(text, self.DIALOG_XPATH), f"提交{text}", before_click=before_click)
         self._until(lambda _: not self._visible(self.DIALOG), f"{text}未成功，配置窗口仍然打开")
 
     def _connection_locator(self, name):
@@ -258,20 +281,98 @@ class ModbusRtuPage:
                 identity["name"] = new_name
         self.current = new_name
 
+    def _confirm_created_connection(self):
+        connection = self.pending_creation
+        name = connection["name"]
+
+        def candidate(_):
+            self._assert_no_creation_conflict()
+            alternatives = connection.get("alternatives")
+            if alternatives:
+                other_names = [button.get_attribute("aria-label").removeprefix("复制连接 ")
+                               for button in self.driver.find_elements(*alternatives)]
+                if other_names:
+                    raise RuntimeError(f"副本候选名称不唯一或与预期不符：{name}、{'、'.join(other_names)}")
+            return self._visible(self._connection_locator(name))
+
+        self._until(candidate, f"列表未显示 RTU 连接 {name}")
+        conn_id = self._read_connection_identity(name, f"读取新建 RTU 连接 {name} 的编号")
+        if not candidate(self.driver):
+            raise RuntimeError(f"读取编号后列表未显示 RTU 连接 {name}")
+        if any(conn_id == link["conn_id"] for link in self.owned.values()):
+            raise RuntimeError(f"连接编号 {conn_id} 与本例已登记连接重复")
+        fields, options = connection["fields"], connection["options"]
+        details = {
+            "传输方式": options["transport_type"],
+            "串口设备": fields["serial_device"],
+            "波特率": fields["baud_rate"],
+            "数据位": fields["data_bits"],
+            "校验位": options["parity"],
+            "停止位": options["stop_bits"],
+            "读取超时": f'{fields["read_timeout_ms"]} ms',
+            "轮询周期": f'{fields["poll_interval_ms"]} ms',
+        }
+        for label, expected in details.items():
+            actual = self._detail(label)
+            if actual != str(expected):
+                raise RuntimeError(f"{name} 的{label}不符，预期 {expected}，实际 {actual}")
+        station = (By.XPATH, "//div[contains(@class,'modbus-connection-card')]"
+                   "//div[contains(@class,'ant-card-head-title')]//span[normalize-space(.)="
+                   + xpath_text(f'从站 {fields["device_id"]}') + "]")
+        if not self._visible(station):
+            raise RuntimeError(f'{name} 的从站号不符，预期 {fields["device_id"]}')
+        self.owned[name] = {key: connection[key] for key in ("name", "fields", "options", "points")}
+        self.owned[name]["conn_id"] = conn_id
+        self.pending_creation = None
+        self.desktop.metadata.setdefault("本例RTU连接", []).append(
+            {"name": name, "conn_id": conn_id, "清理状态": "待清理", **connection.get("metadata", {})})
+        self.current = name
+        logging.getLogger(__name__).info("已确认本例 RTU 连接：%s，编号=%s", name, conn_id)
+        return {"name": name, "conn_id": conn_id}
+
+    def _track_creation(self, connection):
+        self.desktop._check_stop()
+        self.pending_creation = connection
+
+    def _creation_conflict(self, dialog):
+        field_errors = (By.XPATH, dialog + "//*[contains(@class,'ant-form-item-explain-error')]")
+        notices = (By.CSS_SELECTOR, ".ant-message-error")
+        for locator in (field_errors, notices):
+            for item in self.driver.find_elements(*locator):
+                if not item.is_displayed():
+                    continue
+                message = item.text.strip()
+                if locator == notices and not message.startswith(("保存连接失败", "复制连接失败", "操作失败")):
+                    continue
+                if any(word in message.lower() for word in ("已存在", "already exists", "alreadyexists", "already_exists", "duplicate")):
+                    return message
+        return None
+
+    def _assert_no_creation_conflict(self):
+        conflict = self.pending_creation.get("conflict") or self._creation_conflict(self.DIALOG_XPATH)
+        if conflict:
+            self.pending_creation["conflict"] = conflict
+            raise RuntimeError(f'RTU 连接 {self.pending_creation["name"]} 创建发生冲突：{conflict}')
+
+    def _creation_window_closed(self):
+        self._assert_no_creation_conflict()
+        return not self._visible(self.DIALOG)
+
     def create_connection(self, name, serial_device, baud_rate, data_bits, stop_bits, parity,
                           station_id, poll_interval_ms, address_base=0, read_timeout_ms=1000):
         if address_base not in (0, 1) or parity not in ("N", "O", "E"):
             raise ValueError("地址基准必须为0或1，校验位必须为N/O/E")
         with self.desktop.step("确认本例连接名称未被占用", expected="不存在同名连接", actual=name):
+            self._refresh_connection_list("RTU", "modbus-page-alert")
             if self.driver.find_elements(*self._connection_locator(name)) or name in self.owned:
-                raise RuntimeError("存在同名 RTU 连接，拒绝接管或覆盖")
+                raise RuntimeError(f"存在同名 RTU 连接 {name}，拒绝接管或覆盖")
         expected = dict(conn_name=name, serial_device=serial_device, baud_rate=baud_rate,
                         data_bits=data_bits, device_id=station_id, poll_interval_ms=poll_interval_ms,
                         read_timeout_ms=read_timeout_ms)
         options = dict(transport_type="本地串口", parity={"N": "无校验", "O": "奇校验", "E": "偶校验"}[parity],
                        stop_bits=str(stop_bits), address_base="0 基 (协议偏移)" if address_base == 0 else "1 基 (人类编号)")
-        self._click(self._button("新增连接", "//div[contains(@class,'protocol-connection-list-card')]"), "新增专用 RTU 连接")
         self.creation_started = True
+        self._click(self._button("新增连接", "//div[contains(@class,'protocol-connection-list-card')]"), "新增专用 RTU 连接")
         self._select_option("transport_type", options["transport_type"])
         for field, value in expected.items():
             self._fill(field, value, field)
@@ -280,18 +381,12 @@ class ModbusRtuPage:
                 self._select_option(field, value)
         self.desktop.metadata.setdefault("RTU创建意图", []).append({"连接名称": name, "串口": serial_device,
                                                                "站号": station_id, "说明": "仅为创建请求，连接身份待页面确认"})
-        self._click(self._button("创建连接", self.DIALOG_XPATH), "提交创建连接")
-        self.pending_creation = name
-        self._until(lambda _: not self._visible(self.DIALOG), "创建连接未成功，配置窗口仍然打开")
-        self._until(lambda _: self._visible(self._connection_locator(name)), "创建后连接列表未显示本例连接")
-        # 创建成功且名称已在提交前确认未占用，随后读取设备分配的编号作为清理凭据。
-        conn_id = self._read_connection_identity(name, "读取新建连接身份")
-        self.owned[name] = {"name": name, "conn_id": conn_id, "fields": expected, "options": options, "points": {}}
-        self.pending_creation = None
-        self.desktop.metadata.setdefault("本例RTU连接", []).append({"name": name, "conn_id": conn_id, "清理状态": "待清理"})
-        self.current = name
-        logging.getLogger(__name__).info("已创建本例 RTU 连接：%s，编号=%s", name, conn_id)
-        return {"name": name, "conn_id": conn_id}
+        connection = {"name": name, "fields": expected, "options": options, "points": {}}
+        with self._defer_stop():
+            self._click(self._button("创建连接", self.DIALOG_XPATH), f"提交创建 RTU 连接 {name}",
+                        before_click=lambda: self._track_creation(connection))
+            self._until(lambda _: self._creation_window_closed(), f"RTU 连接 {name} 的创建窗口仍然打开")
+            return self._confirm_created_connection()
 
     def add_point(self, tag, function=3, address=0, data_type="UINT16", scale=1, offset=0, *, deadband=0):
         self._assert_identity()
@@ -428,25 +523,48 @@ class ModbusRtuPage:
         confirm = "//*[contains(@class,'ant-popconfirm-buttons')]/button[contains(@class,'ant-btn-primary')]"
         self._click((By.XPATH, popup + confirm), step)
 
+    def _discard_rtu_dialog(self):
+        dialog = (By.CSS_SELECTOR, '.modbus-config-modal[role="dialog"]')
+        busy = (By.CSS_SELECTOR, '.modbus-config-modal[role="dialog"] .ant-btn-loading')
+        self._until(lambda _: not self._visible(busy), "本例 RTU 配置提交未结束")
+        if self.pending_creation and not self.pending_creation.get("conflict"):
+            self.pending_creation["conflict"] = self._creation_conflict(self.DIALOG_XPATH)
+        if self._visible(dialog):
+            discard = self._button("放弃草稿", self.DIALOG_XPATH)
+            close = (By.XPATH, self.DIALOG_XPATH + "//button[contains(@class,'ant-modal-close')]")
+            self._click(discard if self._visible(discard) else close, "关闭本例未提交的 RTU 配置窗口")
+            self._until(lambda _: not self._visible(dialog), "本例 RTU 配置窗口未关闭")
+
     def cleanup(self):
         """协作取消时仍清理；身份不符时停止，不删除未知连接。"""
+        was_cleaning = self._cleaning
         self._cleaning = True
         errors = []
         try:
             try:
-                if self._visible((By.CSS_SELECTOR, '.modbus-config-modal[role="dialog"]')):
-                    discard = self._button("放弃草稿", self.DIALOG_XPATH)
-                    close = discard if self._visible(discard) else self._button("取消", self.DIALOG_XPATH)
-                    self._click(close, "关闭本例未提交的配置窗口")
-                    self._until(lambda _: not self._visible(self.DIALOG), "本例配置窗口未关闭")
+                self._discard_rtu_dialog()
             except Exception as error:
-                errors.append(f"关闭本例配置窗口：{error}")
+                errors.append(f"关闭本例配置窗口：{getattr(error, 'msg', None) or error}")
+            if self.pending_creation:
+                name = self.pending_creation["name"]
+                try:
+                    conflict = self.pending_creation.get("conflict")
+                    if conflict:
+                        raise RuntimeError(f"创建请求发生冲突，拒绝接管：{conflict}")
+                    self._rtu()
+                    self._refresh_connection_list("RTU", "modbus-page-alert")
+                    self._confirm_created_connection()
+                except Exception as error:
+                    errors.append(f"{name} 无法确认创建请求及连接归属：{getattr(error, 'msg', None) or error}")
             for name in list(self.owned):
                 try:
                     with self.desktop.step(f"清理本例 RTU 连接 {name}", cancellable=False):
                         self._rtu()
+                        self._refresh_connection_list("RTU", "modbus-page-alert")
                         pending_name = self.owned[name].get("pending_name")
-                        if pending_name and not self._visible(self._connection_locator(name)):
+                        if (pending_name and self._visible(self._connection_locator(pending_name))
+                                and self._read_connection_identity(pending_name, f"核对 RTU 改名结果 {pending_name}")
+                                == self.owned[name]["conn_id"]):
                             self._record_connection_rename(name, pending_name)
                             name = pending_name
                         self.select(name)
@@ -454,16 +572,17 @@ class ModbusRtuPage:
                         self._assert_identity()
                         self._click((By.XPATH, "//button[@aria-label=" + xpath_text("删除连接 " + name) + "]"), "删除本例专用连接")
                         self._confirm(f"确认删除 {name}？", "确认删除本例专用连接", clear_delete_tooltip=True)
-                        self._until(lambda _: not self.driver.find_elements(*self._connection_locator(name)), "本例连接未删除")
+                        self._until(lambda _: not self.driver.find_elements(*self._connection_locator(name)), f"RTU 连接 {name} 未删除")
+                        self._refresh_connection_list("RTU", "modbus-page-alert")
+                        if self.driver.find_elements(*self._connection_locator(name)):
+                            raise RuntimeError("刷新后仍存在同名连接，未确认删除结果")
                         for identity in self.desktop.metadata.get("本例RTU连接", []):
                             if identity["name"] == name and identity["conn_id"] == self.owned[name]["conn_id"]:
                                 identity["清理状态"] = "已删除"
                         del self.owned[name]
                 except Exception as error:
-                    errors.append(f"{name}：{error}")
-            if self.pending_creation is not None:
-                errors.append(f"无法确认创建请求是否生效及连接身份：{self.pending_creation}")
+                    errors.append(f"{name}：{getattr(error, 'msg', None) or error}")
             if errors:
                 raise RuntimeError("RTU连接清理失败，请人工检查本例资源：" + "；".join(errors))
         finally:
-            self._cleaning = False
+            self._cleaning = was_cleaning

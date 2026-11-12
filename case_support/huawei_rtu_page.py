@@ -65,31 +65,29 @@ def parse_visible_value(text):
 
 class HuaweiRtuPage(ModbusRtuPage):
     def copy_connection(self, source, name, serial_device, station_id):
-        self.select(source)
-        source_config = self.owned[source]
         copy_name = f"{source}_copy"
         copy_button = (By.XPATH, "//button[@aria-label=" + xpath_text(f"复制连接 {source}") + "]")
-        copies = (By.XPATH, "//button[@aria-label=" + xpath_text(f"复制连接 {copy_name}")
-                  + " or starts-with(@aria-label," + xpath_text(f"复制连接 {copy_name}_") + ")]")
+        alternatives = (By.XPATH, "//button[starts-with(@aria-label," + xpath_text(f"复制连接 {copy_name}_") + ")]")
         with self.desktop.step("确认华为副本及目标连接名称未被占用", actual=[copy_name, name]):
-            if (self.driver.find_elements(*copies) or self.driver.find_elements(*self._connection_locator(name))
+            self._refresh_connection_list("RTU", "modbus-page-alert")
+            if (self.driver.find_elements(*alternatives)
+                    or self.driver.find_elements(*self._connection_locator(copy_name))
+                    or self.driver.find_elements(*self._connection_locator(name))
                     or copy_name in self.owned or name in self.owned):
-                raise AssertionError("华为副本或目标连接名称已存在，拒绝覆盖")
+                raise AssertionError(f"华为副本 {copy_name} 或目标连接 {name} 已存在，拒绝覆盖")
 
-        self.pending_creation = copy_name
-        self._click(copy_button, f"复制本例华为 RTU 连接 {source}")
-        conn_id = self._read_connection_identity(copy_name, "读取华为连接副本身份")
-        if any(conn_id == link["conn_id"] for link in self.owned.values()):
-            raise AssertionError(f"华为连接副本 {copy_name} 的编号与已登记连接重复")
-        copy = {"name": copy_name, "conn_id": conn_id,
-                "fields": {**source_config["fields"], "conn_name": copy_name},
-                "options": dict(source_config["options"]),
-                "points": {tag: dict(point) for tag, point in source_config["points"].items()}}
-        self.owned[copy_name] = copy
-        self.current = copy_name
-        self.pending_creation = None
-        self.desktop.metadata.setdefault("本例RTU连接", []).append(
-            {"name": copy_name, "conn_id": conn_id, "复制来源": source, "目标名称": name, "清理状态": "待清理"})
+        self.select(source)
+        source_config = self.owned[source]
+        connection = {"name": copy_name,
+                      "fields": {**source_config["fields"], "conn_name": copy_name},
+                      "options": dict(source_config["options"]),
+                      "points": {tag: dict(point) for tag, point in source_config["points"].items()},
+                      "alternatives": alternatives, "metadata": {"复制来源": source, "目标名称": name}}
+        with self._defer_stop():
+            self._click(copy_button, f"复制本例华为 RTU 连接 {source}",
+                        before_click=lambda: self._track_creation(connection))
+            self._confirm_created_connection()
+        copy = self.owned[copy_name]
 
         stopped = (By.XPATH, "//div[contains(@class,'modbus-connection-card')]"
                    "//div[contains(@class,'ant-card-head-title')]"
@@ -99,10 +97,14 @@ class HuaweiRtuPage(ModbusRtuPage):
         fields = {"conn_name": name, "serial_device": serial_device, "device_id": station_id}
         for field, value in fields.items():
             self._fill(field, value, field)
-        copy["pending_name"] = name
-        self._submit("保存修改")
-        self._record_connection_rename(copy_name, name)
-        copy["fields"].update(fields)
+        def track_rename():
+            self.desktop._check_stop()
+            copy["pending_name"] = name
+
+        with self._defer_stop():
+            self._submit("保存修改", before_click=track_rename)
+            self._record_connection_rename(copy_name, name)
+            copy["fields"].update(fields)
         self.assert_saved_connection()
 
     def add_huawei_point(self, spec, tag):
