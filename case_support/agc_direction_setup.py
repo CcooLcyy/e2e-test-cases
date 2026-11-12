@@ -121,7 +121,8 @@ class AgcDirectionSetup(AgcDirectionPage):
         self.desktop.check("核对 AGC 成员身份", member.get_attribute("aria-label"), f"成员 {self.member_name}")
         self.desktop.check("核对 AGC 成员可控状态", member.find_element(By.CSS_SELECTOR, ".ant-tag").text, "可控")
         summary = [node.text for node in member.find_elements(By.CSS_SELECTOR, ".agc-group-member__summary > span")]
-        self.desktop.check("核对 AGC 额定容量和调节范围", summary[:2], ["额定容量 100 kW", "调节范围 10～100 kW"])
+        self.desktop.check("核对 AGC 额定容量和调节范围", summary[:2],
+                           ["额定容量 100.00 kW", "调节范围 10.00～100.00 kW"])
         for label, endpoint in (("测量点", measurement), ("设定点", setpoint)):
             binding = unique_match(member.find_elements(By.XPATH, ".//div[contains(concat(' ',normalize-space(@class),' '),' agc-group-member__point ')]"
                                     "[./span[normalize-space(.)=" + xpath_text(label) + "]]/div/div"), label)

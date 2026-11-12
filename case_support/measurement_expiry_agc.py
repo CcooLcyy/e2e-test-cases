@@ -117,7 +117,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             self.desktop.check(f"核对成员 {name} 可控状态", card.find_element(By.CSS_SELECTOR, ".ant-tag").text, "可控")
             summary = [node.text for node in card.find_elements(By.CSS_SELECTOR, ".agc-group-member__summary > span")]
             self.desktop.check(f"核对成员 {name} 容量、范围和分配比例", summary,
-                               ["额定容量 100 kW", "调节范围 10～100 kW", "理论占比 50.0%"])
+                               ["额定容量 100.00 kW", "调节范围 10.00～100.00 kW", "理论占比 50.0%"])
             for _, label, tag in self.MEMBER_POINTS:
                 binding = unique_match(card.find_elements(By.XPATH, ".//div[contains(concat(' ',normalize-space(@class),' '),"
                                        "' agc-group-member__point ')][./span[normalize-space(.)=" + xpath_text(label) + "]]/div/div"), label)
