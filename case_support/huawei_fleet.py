@@ -33,7 +33,6 @@ READ_POINTS = (
     HuaweiPoint("active", "有功功率", 32080, "INT32", 2, "0.001", unit="kW"),
     HuaweiPoint("reactive", "无功功率", 32082, "INT32", 2, "0.001", unit="kvar"),
     HuaweiPoint("pf", "功率因数", 32084, "INT16", scale="0.001"),
-    HuaweiPoint("status_word", "状态字", 32000, "UINT16"),
     HuaweiPoint("status", "设备状态", 32089, "UINT16"),
     HuaweiPoint("generating", "发电", 32000, "BOOL", bit_index=1),
     HuaweiPoint("stopped", "停机_限电停运", 32000, "BOOL", bit_index=7),

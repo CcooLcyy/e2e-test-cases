@@ -14,7 +14,7 @@ from .huawei_fleet import (READ_POINTS, STATUS_VALUES, STATUS_WORD_VALUES, UNIMP
 
 LOGGER = logging.getLogger(__name__)
 STAGES = ("发电", "有功调节", "无功调节", "负无功调节", "待机", "限电停运", "恢复发电")
-DEVICE_EXPECTED = "slaveSim 已出现预定工况，18个采集点全部匹配且质量正常"
+DEVICE_EXPECTED = f"slaveSim 已出现预定工况，{len(READ_POINTS)} 个采集点全部匹配且质量正常"
 
 
 def device_step_title(stage, route, station):
@@ -135,8 +135,7 @@ class HuaweiFleetRun:
                 previous_timestamp = None
                 if prior and prior["换算期望"] != str(point_expected(point, before["registers"][point.address]["value"])):
                     previous_timestamp = prior["时间"]
-                expected_raw = (STATUS_VALUES[stage] if point.key == "status" else
-                                STATUS_WORD_VALUES[stage] if point.key == "status_word" else None)
+                expected_raw = STATUS_VALUES[stage] if point.key == "status" else None
                 row = compare_point(point, before["registers"][point.address]["value"],
                                     after["registers"][point.address]["value"], upper.get(point.key, {}),
                                     expected_raw=expected_raw,
