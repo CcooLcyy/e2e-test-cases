@@ -12,6 +12,7 @@ from case_support.agc_direction_iec104 import AgcDirectionIec104
 from case_support.agc_direction_scenario import AgcDirectionProfile, AgcDirectionScenario
 from case_support.agc_direction_setup import AgcDirectionSetup
 from case_support.agc_direction_simulator import AgcDirectionSimulator
+from case_support.case_metadata import execution_logic
 from case_support.login_plan import login_steps
 from case_support.modbus_rtu_page import ModbusRtuPage
 from testbench.case_plan import (
@@ -169,12 +170,21 @@ def _scenario_steps(prepare_kw, initial, target_kw, changed_key, feedback, *, me
 
 def _agc_flow(prepare_kw, initial, target_kw, changed_key, feedback, *, measured=False):
     steps = _scenario_steps(prepare_kw, initial, target_kw, changed_key, feedback, measured=measured)
+    measured_route = " 实测功率另接到遥测点。" if measured else ""
+    measurement = f"将 slaveSim 实测改为 {AgcDirectionSimulator.LAGGING_KW} kW。" if measured else ""
+    describe = execution_logic(f"""
+        1. 登录 DSP 上位机并连接现场。重建本例 slaveSim 总线，回读实际串口、站号和实测、设定寄存器，配置专用 RTU 连接并确认采集正常。
+        2. 配置并运行范围为 {LOWER_KW}～{UPPER_KW} kW 的单成员绝对值 AGC 组。启动专用 IEC104 从站，将总目标接到遥调点，增、减闭锁接到遥信点。{measured_route}
+        3. 模拟 104 主站连接后遥调 {prepare_kw} kW，核对肯定确认、终止以及 slaveSim 实际收到的设定值。在同一会话总召，确认{initial}。
+        4. 记录主站基线，遥调 {target_kw} kW 并核对肯定确认和终止。{measurement}核对主站本轮反馈，{feedback}。
+        5. 失败时先保留现场证据，再删除本例 IEC104 连接、AGC 组和 RTU 连接，清空并回读 slaveSim 总线。
+    """)
 
     def decorate(function):
         function.agc_scenario = (steps, measured)
         return case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT,
                          SIM_START, *PREPARE, MASTER104_START, MASTER_CONNECT, *steps,
-                         *CLEANUP, SIM_FINISH, MASTER104_FINISH, DESKTOP_FINISH)(function)
+                         *CLEANUP, SIM_FINISH, MASTER104_FINISH, DESKTOP_FINISH)(describe(function))
     return decorate
 
 
