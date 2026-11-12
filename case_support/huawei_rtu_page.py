@@ -1,7 +1,7 @@
 """华为行为模型的上位机点表适配，业务数值只读取可见运行表。"""
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
 import logging
 
@@ -143,34 +143,41 @@ class HuaweiRtuPage(ModbusRtuPage):
                     self.current, tag, point["address"], point["data_type"], point["function"])
 
     def assert_saved_configuration(self):
-        """导航离开后重新读取连接及全部点位，分别核对读点、写点和BOOL解析。"""
+        """重进 RTU 页面并核对已保存的连接配置。"""
         name = self.current
         self._menu("模块运维")
         self._rtu()
         self.select(name)
         self.assert_saved_connection()
-        for tag, point in self.owned[name]["points"].items():
-            locator = (By.XPATH, "//button[@aria-label=" + xpath_text("编辑点位 " + tag) + "]")
-            self._click(locator, f"重新读取华为点位 {tag}")
-            for field, expected in (("tag", tag), ("address", point["address"])):
-                self._assert_input(field, expected)
-            self._assert_select("function", FUNCTION_LABELS[point["function"]])
-            self._assert_select("data_type", point["data_type"])
-            self._assert_select("reg_count", f"{point['reg_count']} 个寄存器")
+
+    def _assert_source_point_configuration(self, configuration, points):
+        expected_rows = {}
+        for tag, point in points.items():
+            expected = {
+                "标签": tag,
+                "地址": str(point["address"]),
+                "功能码": FUNCTION_LABELS[point["function"]],
+                "数据类型": point["data_type"],
+                "寄存器数": str(point["reg_count"]),
+                "BOOL 解析": "-",
+                "字节序": "AB",
+            }
             if point["data_type"] == "BOOL":
-                field = "bit_index" if point["bit_index"] is not None else "enum_value"
-                self._assert_select("bool_mode", "位索引" if field == "bit_index" else "整字相等值")
-                self._assert_input(field, point[field])
+                expected["BOOL 解析"] = (f"位 {point['bit_index']}" if point["bit_index"] is not None
+                                         else f"相等值 {point['enum_value']}")
             else:
-                self._assert_input("scale", point["scale"])
-                self._assert_input("offset", point["offset"])
+                # 配置表的工程量字段按两位小数显示，采集验收使用完整的预期系数。
+                for column, field in (("缩放系数", "scale"), ("偏移量", "offset")):
+                    display = Decimal(str(point[field])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    expected[column] = "0.00" if display.is_zero() else str(display)
                 if point["function"] == 3:
-                    self._assert_input("deadband", 0)
+                    expected["死区"] = "0.00"
             if point["reg_count"] == 2:
-                self._assert_select("word_order", "HL")
-            self._assert_select("byte_order", "AB")
-            self._close_check_dialog()
-        LOGGER.info("华为连接及点表重新读取核对完成：%s，点数=%s", name, len(self.owned[name]["points"]))
+                expected["字序"] = "HL"
+            expected_rows[tag] = expected
+        actual_rows = {tag: {column: configuration[tag][column] for column in expected}
+                       for tag, expected in expected_rows.items()}
+        self.desktop.check("整表核对首台华为点位配置", actual_rows, expected_rows)
 
     def assert_saved_connection(self):
         self._assert_identity()
@@ -199,7 +206,7 @@ class HuaweiRtuPage(ModbusRtuPage):
         """, table)
 
     def read_point_configuration(self):
-        """整表回读复制前后的可见配置，避免逐个重开副本点位编辑框。"""
+        """一次读取当前连接配置表的全部可见点位。"""
         self._assert_identity()
         card = "//div[contains(@class,'protocol-point-card')]"
         config_view = (By.XPATH, card + "//label[normalize-space(.)='配置视图']")
@@ -209,7 +216,9 @@ class HuaweiRtuPage(ModbusRtuPage):
         show_fields = self._button("显示工程量/字节序", card)
         if self._visible(show_fields):
             self._click(show_fields, "显示华为点表工程量和字节序")
-        expected_tags = set(self.owned[self.current]["points"])
+        connection = self.owned[self.current]
+        points = connection["points"]
+        expected_tags = set(points)
         with self.desktop.step(f"整表回读华为连接 {self.current} 的点位配置", expected=f"{len(expected_tags)} 个点位"):
             rows = self._until(lambda _: self._read_point_table_rows(), "华为配置点表未显示任何点位")
             configuration = {}
@@ -221,7 +230,9 @@ class HuaweiRtuPage(ModbusRtuPage):
                         "偏移量", "死区", "字序", "字节序"} <= fields.keys(), "华为配置点表列不完整"
                 configuration[tag] = {label: value for label, value in fields.items() if label != "操作"}
             self.desktop.check("核对华为点表全部标签", sorted(configuration), sorted(expected_tags))
-            return configuration
+        if "复制来源" not in connection.get("metadata", {}):
+            self._assert_source_point_configuration(configuration, points)
+        return configuration
 
     def _read_visible_rows(self):
         rows = self._read_point_table_rows()
