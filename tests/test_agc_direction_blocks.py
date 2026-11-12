@@ -137,7 +137,7 @@ PREPARE = (
          "采用绝对值有功控制，单位 kW，成员范围 10～100 kW，点位路由对应本例 RTU", _configure_agc),
     Step("agc.direction.iec104", "建立本例 104 从站及 AGC 路由",
          "回读实际端口、公共地址、总目标遥调和闭锁遥信点号，核对路由方向", _configure_104),
-    Step("agc.direction.group.start", "启动本例 AGC 控制组",
+    Step("agc.direction.group.start", "确保本例 AGC 控制组已运行",
          "本例组运行中、功能投入、允许远方", lambda c: c.agc.start()),
     Step("agc.direction.iec104.start", "启动本例 IEC104 从站",
          "本例链路进入运行中", lambda c: c.iec104.start()),

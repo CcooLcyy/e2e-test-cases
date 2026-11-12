@@ -1,5 +1,6 @@
 """Prepare and remove the dedicated AGC group through the DSP Upper UI."""
 
+from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 
 from .agc_direction_page import AgcDirectionPage, unique_match
@@ -181,17 +182,54 @@ class AgcDirectionSetup(AgcDirectionPage):
     def start(self):
         self._control_view("控制策略")
         self._select_owned_group()
-        self._click(self._button("启动控制组", self.OVERVIEW), "启动本例 AGC 控制组")
+        start_button = self._button("启动控制组", ".")
+        required = {"运行中", "功能投入", "远方"}
+        badges = set()
+        button_status = "未检查"
 
-        def running(_):
+        def read_overview():
+            nonlocal badges
             overview = self._selected_overview()
-            if overview:
-                badges = {node.text for node in overview.find_elements(By.CSS_SELECTOR, ".agc-runtime-heading .ant-tag")}
-                return {"运行中", "功能投入", "远方"} <= badges
-            return False
+            badges = {node.text for node in overview.find_elements(
+                By.CSS_SELECTOR, ".agc-runtime-heading .ant-tag")} if overview else set()
+            return overview
 
-        with self.desktop.step("确认 AGC 已运行、投入并允许远方控制"):
-            self._until(running, "AGC 控制组未进入运行、功能投入和远方状态")
+        def running_or_start(_):
+            nonlocal button_status
+            overview = read_overview()
+            if "运行中" in badges:
+                button_status = "已运行，无需点击"
+                return True
+            if overview is None:
+                button_status = "本例控制组总览未显示"
+                return False
+            visible = [button for button in overview.find_elements(*start_button) if button.is_displayed()]
+            if not visible:
+                button_status = "未显示"
+                return False
+            button = unique_match(visible, "本例 AGC 启动控制组按钮")
+            if not button.is_enabled() or button.get_attribute("aria-disabled") == "true":
+                button_status = "不可用"
+                return False
+            button_status = "可用"
+            button.click()
+            button_status = "已点击"
+            return True
+
+        def ready(_):
+            read_overview()
+            return required <= badges
+
+        with self.desktop.step("确保本例 AGC 控制组已运行", expected="运行中、功能投入、远方"):
+            try:
+                self._until(running_or_start)
+                self._until(ready)
+            except TimeoutException as error:
+                actual = "、".join(sorted(badges)) or "未显示"
+                raise TimeoutException(
+                    f"AGC 控制组 {self.name} 未达到运行、功能投入和远方状态；"
+                    f"实际状态：{actual}；启动按钮：{button_status}"
+                ) from error
             self.select_group(self.name, self.group["conn_id"])
 
     def _close_draft(self, dialog, button):
