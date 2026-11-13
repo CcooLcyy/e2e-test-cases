@@ -161,13 +161,28 @@ def _wait_master(context, expected, baseline):
             master.metadata.setdefault("本例遥测观察", []).append({"预期": expected, "实际": dict(last)})
 
 
+def master_measurement_baseline(master):
+    return {
+        int(row["cells"][1]): int(row["frame_id"] or 0)
+        for row in master.read_measurements()["rows"] if row["cells"][0] == "1"
+    }
+
+
+def verify_power_telemetry(context, expected, baseline):
+    if context.previous_remote is not None:
+        changed = {tag: value for tag, value in expected.items() if context.previous_remote[tag] != value}
+        if changed:
+            _wait_master(context, changed, baseline)
+    with context.master.step("总召读取本阶段遥测", expected="收到本次总召确认和终止"):
+        context.master.interrogate()
+    _wait_master(context, expected, baseline)
+    context.previous_remote = expected
+
+
 def power_phase(identifier, label, measurement, station, remote, *, configured_upper=None):
     """每个工况使用固定期望，并要求本轮产生新的主站接收帧。"""
     def check(context):
-        baseline = {
-            int(row["cells"][1]): int(row["frame_id"] or 0)
-            for row in context.master.read_measurements()["rows"] if row["cells"][0] == "1"
-        }
+        baseline = master_measurement_baseline(context.master)
         if configured_upper is not None:
             context.upper.set_member_upper_limit(configured_upper)
         measured = context.measured
@@ -181,14 +196,7 @@ def power_phase(identifier, label, measurement, station, remote, *, configured_u
             context.upper.wait_value("power-measured", measurement, 0, context.timeout, previous_time)
             context.current = measurement
         context.upper.wait_station_values(station, context.timeout)
-        if context.previous_remote is not None:
-            changed = {tag: value for tag, value in remote.items() if context.previous_remote[tag] != value}
-            if changed:
-                _wait_master(context, changed, baseline)
-        with context.master.step("总召读取本阶段遥测", expected="收到本次总召确认和终止"):
-            context.master.interrogate()
-        _wait_master(context, remote, baseline)
-        context.previous_remote = remote
+        verify_power_telemetry(context, remote, baseline)
 
     return Step(identifier, label, f"实测 {measurement}，全站 {station}，IEC104 {remote} 且品质有效", check)
 

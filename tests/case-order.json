@@ -44,7 +44,8 @@
         "tests/test_agc_direction_blocks.py::test_agc_increase_block_does_not_wait_for_measured_limit",
         "tests/test_agc_rebalance.py::test_agc_redistributes_when_rtu_member_loses_communication",
         "tests/test_agc_power_range.py::test_agc_station_power_range_reaches_iec104",
-        "tests/test_measurement_expiry.py::test_agc_member_measurement_expiry"
+        "tests/test_measurement_expiry.py::test_agc_member_measurement_expiry",
+        "tests/test_agc_rebalance.py::test_agc_distributes_by_rated_capacity"
       ]
     },
     {

@@ -12,6 +12,8 @@ from .modbus_rtu_page import xpath_text
 
 class MeasurementExpiryAgc(AgcDirectionSetup):
     COMMUNICATION_TIMEOUT_MS = 60000
+    EQUAL_ALLOCATION = "平均分配（等权）"
+    CAPACITY_ALLOCATION = "按额定容量比例"
     MEMBER_POINTS = (
         ("有功测量点", "测量点", "measured"),
         ("有功设定点", "设定点", "setpoint"),
@@ -21,12 +23,14 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
     RUNTIME_TABLE = (By.XPATH, AgcDirectionSetup.OVERVIEW + "//div[contains(@class,'agc-runtime-members')]")
     RUNTIME_ROWS = ".ant-table-tbody > tr[data-row-key]"
 
-    def __init__(self, desktop, *, capacity_kw=100):
+    def __init__(self, desktop, *, capacity_kw=100, minimum_kw=10):
         super().__init__(desktop)
         self.members = {}
         self.capacity_kw = capacity_kw
+        self.member_capacities = {}
+        self.minimum_kw = minimum_kw
 
-    def _choose_equal_allocation(self):
+    def _choose_allocation(self, allocation):
         locator = (By.XPATH, self.GROUP_DIALOG + "//label[normalize-space(.)='分配方式']"
                    "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-form-item ')][1]"
                    "//input[@role='combobox']")
@@ -34,7 +38,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         field_id = field.get_attribute("id")
         if not field_id:
             raise RuntimeError("AGC 分配方式缺少下拉框标识")
-        self._choose(self.GROUP_DIALOG, field_id, "平均分配（等权）")
+        self._choose(self.GROUP_DIALOG, field_id, allocation)
 
     def _open_member_advanced(self):
         locator = (By.XPATH, self.MEMBER_DIALOG + "//summary[normalize-space(.)='更多控制参数']")
@@ -45,8 +49,9 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
     def _add_member(self, member_name, connection_name, configure_expiry):
         self._click((By.XPATH, self.GROUP_DIALOG + "//button[@aria-label='添加成员']"), f"添加 AGC 成员 {member_name}")
         self._fill_group_field(self.MEMBER_DIALOG, "member_name", member_name)
-        for field, value in (("capacity_kw_decimal", self.capacity_kw), ("min_kw_decimal", 10),
-                             ("max_kw_decimal", self.capacity_kw)):
+        capacity = self.member_capacities[member_name]
+        for field, value in (("capacity_kw_decimal", capacity), ("min_kw_decimal", self.minimum_kw),
+                             ("max_kw_decimal", capacity)):
             self._fill_group_field(self.MEMBER_DIALOG, field, value)
         connection = f"ModbusRTU / {connection_name}"
         for label, _, tag in self.MEMBER_POINTS:
@@ -62,13 +67,17 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
 
     def _record_group(self, item):
         self.group = dict(group_name=self.name, members=dict(self.members), conn_id=self._group_identity(item),
-                          lower_kw=10, upper_kw=self.capacity_kw, cleanup="待清理")
+                          lower_kw=self.minimum_kw, cleanup="待清理")
+        if len(set(self.member_capacities.values())) == 1:
+            self.group["upper_kw"] = next(iter(self.member_capacities.values()))
+        else:
+            self.group["member_capacities_kw"] = dict(self.member_capacities)
         self.desktop.metadata["本例 AGC 控制组"] = self.group
 
     def _expected_members(self):
         return self.members
 
-    def create_communication_group(self, group_name, members, *, configure_expiry=None):
+    def create_communication_group(self, group_name, members, *, configure_expiry=None, capacities=None):
         """为每个成员绑定独立的 RTU 连接，读回映射和总控输入 Tag。"""
         if self._draft_opened or self._save_requested or self.group is not None:
             raise RuntimeError("本例 AGC 控制组已开始创建")
@@ -76,14 +85,22 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             raise ValueError("本例 AGC 需要至少两个成员，且每个成员使用独立 RTU 连接")
         self.name = group_name
         self.members = dict(members)
+        if capacities is None:
+            self.member_capacities = dict.fromkeys(self.members, self.capacity_kw)
+            allocation = self.EQUAL_ALLOCATION
+        else:
+            if capacities.keys() != self.members.keys():
+                raise ValueError("必须为每个 AGC 成员提供额定容量")
+            self.member_capacities = dict(capacities)
+            allocation = self.CAPACITY_ALLOCATION
         self._control_view("控制策略")
         self._refresh_control_groups("AGC")
         if self._group_item(group_name):
             raise RuntimeError(f"AGC 已存在同名控制组：{group_name}")
 
         with self.desktop.step("新增本例 AGC 控制组和成员", expected={
-            "组": group_name, "成员与 RTU 连接": self.members, "模式": "周期直分配，绝对值，等权",
-            "成员容量及范围 kW": f"{self.capacity_kw}，10～{self.capacity_kw}",
+            "组": group_name, "成员与 RTU 连接": self.members, "模式": f"周期直分配 · {allocation} · 绝对值",
+            "成员额定容量及上限 kW": self.member_capacities, "成员下限 kW": self.minimum_kw,
             "通信心跳超时毫秒": self.COMMUNICATION_TIMEOUT_MS,
         }):
             self._draft_opened = True
@@ -91,7 +108,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             self._fill_group_field(self.GROUP_DIALOG, "group_name", group_name)
             self._choose(self.GROUP_DIALOG, "control_mode", "周期直分配")
             self._choose(self.GROUP_DIALOG, "p_cmd_mode", "绝对值")
-            self._choose_equal_allocation()
+            self._choose_allocation(allocation)
             self._members_tab()
             for member_name, connection_name in self.members.items():
                 self._add_member(member_name, connection_name, configure_expiry)
@@ -100,31 +117,33 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         with self.desktop.step("读取已保存的 AGC 配置和实际点位"):
             overview = self._select_owned_group()
             self.desktop.check("核对 AGC 控制与分配模式", overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text,
-                               "周期直分配 · 平均分配（等权） · 绝对值")
+                               f"周期直分配 · {allocation} · 绝对值")
             route_error = self._visible((By.XPATH, ROUTE_ALERT))
             if route_error:
                 raise AssertionError("AGC 自动路由保存失败：" + route_error.text)
             self.group.update(self._read_point_specs())
-            self._verify_members(configure_expiry)
+            self._verify_members(configure_expiry, proportional=capacities is not None)
         return dict(self.group)
 
-    def _verify_members(self, configure_expiry):
+    def _verify_members(self, configure_expiry, *, proportional):
         self._click(self._button("编辑", self.OVERVIEW), "重新打开 AGC 控制组读取已保存映射")
         self._draft_opened = True
         self._members_tab()
         cards = self.driver.find_elements(By.XPATH, self.GROUP_DIALOG + self.MEMBER_CARD)
         self.desktop.check("核对本例 AGC 成员", sorted(card.get_attribute("aria-label") for card in cards),
                            sorted(f"成员 {name}" for name in self.members))
-        capacity = f"{self.capacity_kw:.2f}"
-        share = f"{Decimal(100) / len(self.members):.1f}%"
+        weights = self.member_capacities if proportional else dict.fromkeys(self.members, 1)
         for name, connection_name in self.members.items():
+            capacity = f"{self.member_capacities[name]:.2f}"
+            share = f"{Decimal(100) * weights[name] / sum(weights.values()):.1f}%"
             edit = (By.XPATH, self.GROUP_DIALOG + "//button[@aria-label=" + xpath_text(f"编辑成员 {name}") + "]")
             self._until(lambda _: (button := self._visible(edit)) and button.is_enabled(), f"成员 {name} 的映射尚未就绪")
             card = self._visible((By.XPATH, self.GROUP_DIALOG + self.MEMBER_CARD + "[@aria-label=" + xpath_text(f"成员 {name}") + "]"))
             self.desktop.check(f"核对成员 {name} 可控状态", card.find_element(By.CSS_SELECTOR, ".ant-tag").text, "可控")
             summary = [node.text for node in card.find_elements(By.CSS_SELECTOR, ".agc-group-member__summary > span")]
             self.desktop.check(f"核对成员 {name} 容量、范围和分配比例", summary,
-                               [f"额定容量 {capacity} kW", f"调节范围 10.00～{capacity} kW", f"理论占比 {share}"])
+                               [f"额定容量 {capacity} kW", f"调节范围 {self.minimum_kw:.2f}～{capacity} kW",
+                                f"理论占比 {share}"])
             for _, label, tag in self.MEMBER_POINTS:
                 binding = unique_match(card.find_elements(By.XPATH, ".//div[contains(concat(' ',normalize-space(@class),' '),"
                                        "' agc-group-member__point ')][./span[normalize-space(.)=" + xpath_text(label) + "]]/div/div"), label)
