@@ -29,7 +29,7 @@ class AvcPeriodIec104(RtuQualityIec104):
     def _import_avc_target(self, group, tag):
         connection = f"AVC/{group}"
         source = f"{connection} : {tag}"
-        destination = f"{self.name}-target"
+        destination = f"{self.name}-104-target"
         point_type = "FLOAT (短浮点值)"
         self._button("添加点位", self.POINT_CARD, "打开 IEC104 添加点位菜单")
         self.upper._click((By.XPATH, "//*[@role='menuitem'][normalize-space(.)='从数据总线导入']"), "从数据总线导入")
