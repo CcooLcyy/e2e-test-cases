@@ -4,11 +4,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 import struct
 
-from selenium.webdriver.common.by import By
-
 from testbench.master104_commands import FRAME_CAUSES, _read_frames
 
-from .modbus_rtu_page import xpath_text
 from .rtu_quality_frames import decode_frame
 from .rtu_quality_iec104 import RtuQualityIec104
 
@@ -16,7 +13,10 @@ from .rtu_quality_iec104 import RtuQualityIec104
 class AvcPeriodIec104(RtuQualityIec104):
     def configure(self, group, target, calculation):
         self.create()
-        target_ioa = self._import_avc_target(group, target) if target is not None else None
+        target_ioa = (
+            self.import_point(group, target, f"{self.name}-104-target", module="AVC", business_type="遥调")
+            if target is not None else None
+        )
         calculation_ioa = (
             self.import_point(group, calculation, f"{self.name}-calculation", module="AVC")
             if calculation is not None else None
@@ -25,29 +25,6 @@ class AvcPeriodIec104(RtuQualityIec104):
         self.check_routes()
         self.start()
         return target_ioa, calculation_ioa
-
-    def _import_avc_target(self, group, tag):
-        connection = f"AVC/{group}"
-        source = f"{connection} : {tag}"
-        destination = f"{self.name}-104-target"
-        point_type = "FLOAT (短浮点值)"
-        self._button("添加点位", self.POINT_CARD, "打开 IEC104 添加点位菜单")
-        self.upper._click((By.XPATH, "//*[@role='menuitem'][normalize-space(.)='从数据总线导入']"), "从数据总线导入")
-        self._choose("先选择来源连接", connection, connection)
-        self._choose("选择一个或多个来源点位", tag, source)
-        self._choose("统一点位类型", None, point_type)
-        self._choose("统一 IOA 业务类别", None, "遥调")
-        draft = (By.XPATH, self.IMPORT_DIALOG + "//tr[.//span[normalize-space(.)=" + xpath_text(source) + "]]")
-        row = self.upper._until(lambda _: self.upper._visible(draft), f"IEC104 导入草稿未显示 {source}")
-        self.upper._replace(row.find_element(By.XPATH, "./td[2]//input"), destination)
-        self._button("导入 1 个点位", self.IMPORT_DIALOG, "保存 IEC104 遥调点及路由")
-        saved = (By.XPATH, self.POINT_CARD + "//tr[@data-row-key=" + xpath_text(destination) + "]")
-        point = self.upper._until(lambda _: self.upper._visible(saved), f"IEC104 点表未显示 {destination}")
-        cells = [cell.text.strip() for cell in point.find_elements(By.XPATH, "./td")]
-        ioa = next((int(cell.split()[0]) for cell in cells if "(0x" in cell and cell.split()[0].isdecimal()), None)
-        assert ioa is not None and point_type in cells and "遥调" in cells, f"IEC104 遥调点配置不符：{cells!r}"
-        self.routes.append((f"IEC104/{self.name} : {destination}", source))
-        return ioa
 
 
 def snapshot(master):

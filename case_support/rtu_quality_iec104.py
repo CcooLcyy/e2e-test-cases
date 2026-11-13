@@ -152,7 +152,7 @@ class RtuQualityIec104:
         cells = row.find_elements(By.CSS_SELECTOR, ":scope > .ant-table-cell")
         return [cell.get_property("innerText").strip() for cell in cells]
 
-    def import_point(self, connection, tag, destination, *, module="ModbusRTU"):
+    def import_point(self, connection, tag, destination, *, module="ModbusRTU", business_type="遥测"):
         self._select_link(self.name)
         self._assert_link()
         self._button("添加点位", self.POINT_CARD, "打开 IEC104 添加点位菜单")
@@ -161,24 +161,29 @@ class RtuQualityIec104:
         self._choose("先选择来源连接", connection, source)
         self._choose("选择一个或多个来源点位", tag, f"{source} : {tag}")
         self._choose("统一点位类型", None, "FLOAT (短浮点值)")
-        self._choose("统一 IOA 业务类别", None, "遥测")
+        self._choose("统一 IOA 业务类别", None, business_type)
         row = (By.XPATH, self.IMPORT_DIALOG + "//tr[.//span[normalize-space(.)=" + xpath_text(f"{source} : {tag}") + "]]")
         draft = self.upper._until(lambda _: self.upper._visible(row), "导入点位草稿未显示")
         self.upper._replace(draft.find_element(By.XPATH, "./td[2]//input"), destination)
-        self._button("导入 1 个点位", self.IMPORT_DIALOG, "保存 IEC104 遥测点和数据总线路由")
+        self._button("导入 1 个点位", self.IMPORT_DIALOG, f"保存 IEC104 {business_type}点和数据总线路由")
         cells = []
-        with self.upper.desktop.step(f"核对已保存的 IEC104 遥测点 {destination}",
-                                     expected="点表显示本例标签、IOA、短浮点类型和遥测业务类别",
+        with self.upper.desktop.step(f"核对已保存的 IEC104 {business_type}点 {destination}",
+                                     expected=f"点表显示本例标签、IOA、短浮点类型和{business_type}业务类别",
                                      actual=cells):
             self.upper._until(lambda _: not self.upper._visible((By.XPATH, self.IMPORT_DIALOG)),
-                              f"IEC104 遥测点 {destination} 的导入窗口未关闭")
-            self.routes.append((f"{source} : {tag}", f"IEC104/{self.name} : {destination}"))
+                              f"IEC104 {business_type}点 {destination} 的导入窗口未关闭")
+            bus_endpoint = f"{source} : {tag}"
+            iec104_endpoint = f"IEC104/{self.name} : {destination}"
+            self.routes.append((iec104_endpoint, bus_endpoint) if business_type == "遥调"
+                               else (bus_endpoint, iec104_endpoint))
             search = self._point_search()
             previous_query = search.get_property("value")
             self.upper._replace(search, destination)
             cells.extend(self._saved_point_cells(destination))
             ioa = next((int(value.split()[0]) for value in cells if "(0x" in value and value.split()[0].isdecimal()), None)
-            assert ioa is not None and "FLOAT (短浮点值)" in cells and "遥测" in cells, f"IEC104 遥测配置不符：{cells!r}"
+            assert ioa is not None and "FLOAT (短浮点值)" in cells and business_type in cells, (
+                f"IEC104 {business_type}配置不符：{cells!r}"
+            )
             self.upper._replace(self._point_search(), previous_query)
         return ioa
 
