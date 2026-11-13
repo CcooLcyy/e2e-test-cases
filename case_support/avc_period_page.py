@@ -21,6 +21,7 @@ class AvcPeriodPage(ControlGroupPage):
         super().__init__(desktop)
         self.group_name = None
         self.member_name = None
+        self.member_names = []
         self.conn_id = None
         self.group_draft_opened = False
         self.group_submitted = False
@@ -137,10 +138,13 @@ class AvcPeriodPage(ControlGroupPage):
     def create_group(self, group_name, *, mode, calculation_period, command_period, voltage_tag,
                      target_tag, rtu_connection, q_measurement_tag, q_setpoint_tag, kp=2,
                      member_name="inverter", q_min=0, q_max=100, rtu_target_tag=None,
-                     voltage_connection=None, configure_expiry=None):
+                     voltage_connection=None, configure_expiry=None, additional_members=(),
+                     proportional=False):
         self._open_groups()
         self._refresh_control_groups("AVC")
         self.group_name, self.member_name = group_name, member_name
+        members = ((member_name, rtu_connection, q_measurement_tag, q_setpoint_tag, q_min, q_max), *additional_members)
+        self.member_names = [member[0] for member in members]
         if self._group_item():
             raise AssertionError(f"现场已存在同名 AVC 控制组：{group_name}")
         self.group_draft_opened = True
@@ -150,6 +154,12 @@ class AvcPeriodPage(ControlGroupPage):
         self._choose(GROUP, "id", "command_mode", MODE_LABELS[mode])
         self._choose(GROUP, "id", "control_mode", "周期直分配")
         self._set_period_fields(calculation_period, command_period)
+        if proportional:
+            allocation = (By.XPATH, GROUP + "//label[normalize-space(.)='分配方式']"
+                          "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-form-item ')][1]"
+                          "//input[@role='combobox']")
+            field = self._until(lambda _: self._visible(allocation), "AVC 分配方式未显示")
+            self._choose(GROUP, "id", field.get_attribute("id"), "按可调范围比例")
         self._fill_field(GROUP, "voltage_meas_tag", voltage_tag)
         self._fill_field(GROUP, "voltage_meas_unit", "V")
         if mode == "voltage":
@@ -168,14 +178,19 @@ class AvcPeriodPage(ControlGroupPage):
         if rtu_target_tag is not None:
             self._choose(GROUP, "aria-label", "总无功命令数据来源", f"ModbusRTU / {rtu_connection} / {rtu_target_tag}",
                          search=rtu_target_tag, multiple=True)
-        self._click((By.XPATH, GROUP + '//button[@aria-label="添加成员"]'), "新增本例 AVC 成员")
-        self._fill_field(MEMBER, "member_name", member_name)
-        self._fill_field(MEMBER, "q_min_kvar", q_min)
-        self._fill_field(MEMBER, "q_max_kvar", q_max)
-        self._bind_member("无功测量点", rtu_connection, q_measurement_tag)
-        self._bind_member("无功设定点", rtu_connection, q_setpoint_tag)
-        self._click(self._button("确认成员", MEMBER), "确认本例 AVC 成员")
-        self._wait_draft_closed(MEMBER, "AVC 成员草稿未确认")
+        for name, connection, measurement, setpoint, lower, upper in members:
+            self._click((By.XPATH, GROUP + '//button[@aria-label="添加成员"]'), f"新增本例 AVC 成员 {name}")
+            self._fill_field(MEMBER, "member_name", name)
+            if setpoint is None:
+                self._choose(MEMBER, "id", "controllable", "仅参与测量")
+            else:
+                self._fill_field(MEMBER, "q_min_kvar", lower)
+                self._fill_field(MEMBER, "q_max_kvar", upper)
+            self._bind_member("无功测量点", connection, measurement)
+            if setpoint is not None:
+                self._bind_member("无功设定点", connection, setpoint)
+            self._click(self._button("确认成员", MEMBER), f"确认本例 AVC 成员 {name}")
+            self._wait_draft_closed(MEMBER, "AVC 成员草稿未确认")
         with self._finish_group_save():
             self.group_submitted = True
             self._click(self._button("保存控制组并建立路由", GROUP), "保存本例 AVC 控制组与路由")
@@ -188,6 +203,8 @@ class AvcPeriodPage(ControlGroupPage):
                 "目标命令": target_tag, "成员": member_name, "无功量测": q_measurement_tag,
                 "无功设定": q_setpoint_tag, "RTU 连接": rtu_connection,
             }
+            if additional_members:
+                self.desktop.metadata["本例 AVC 控制组"]["成员点位与范围"] = members
         self._select_owned()
         self._check_route_save()
         if configure_expiry is not None:
@@ -281,7 +298,7 @@ class AvcPeriodPage(ControlGroupPage):
                     self._select_group_item(item, conn_id)
                     if self.conn_id is None:
                         members = [node.text for node in self.driver.find_elements(By.XPATH, AVC_MEMBER_NAMES) if node.is_displayed()]
-                        if members != [self.member_name]:
+                        if sorted(members) != sorted(self.member_names):
                             raise RuntimeError(f"无法确认待清理 AVC 控制组的专用成员：{members}")
                         self.conn_id = conn_id
                     self._finish_owned_routes("AVC", self.group_name)

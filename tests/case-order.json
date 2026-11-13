@@ -45,7 +45,13 @@
         "tests/test_agc_rebalance.py::test_agc_redistributes_when_rtu_member_loses_communication",
         "tests/test_agc_power_range.py::test_agc_station_power_range_reaches_iec104",
         "tests/test_measurement_expiry.py::test_agc_member_measurement_expiry",
-        "tests/test_agc_rebalance.py::test_agc_distributes_by_rated_capacity"
+        "tests/test_agc_rebalance.py::test_agc_distributes_by_rated_capacity",
+        "tests/test_agc_multimember_blocks.py::test_agc_partial_saturation_redistributes_without_group_block",
+        "tests/test_control_period_boundaries.py::test_agc_burst_respects_command_interval_and_uses_latest_target",
+        "tests/test_control_period_boundaries.py::test_agc_running_group_saves_periods_and_restarts",
+        "tests/test_control_measurement_quality.py::test_agc_excludes_member_until_first_measurement",
+        "tests/test_control_measurement_quality.py::test_agc_excludes_member_with_bad_measurement",
+        "tests/test_control_measurement_quality.py::test_agc_waits_for_measurement_after_rtu_polling_restarts"
       ]
     },
     {
@@ -55,7 +61,12 @@
         "tests/test_avc_control_periods.py::test_avc_burst_respects_command_interval_and_uses_latest_target",
         "tests/test_avc_control_periods.py::test_avc_stopped_group_applies_new_periods_after_restart",
         "tests/test_avc_reactive_headroom.py::test_avc_station_reactive_headroom_reaches_iec104",
-        "tests/test_measurement_expiry.py::test_avc_voltage_measurement_expiry"
+        "tests/test_measurement_expiry.py::test_avc_voltage_measurement_expiry",
+        "tests/test_avc_multimember_allocation.py::test_avc_distributes_by_configured_reactive_range",
+        "tests/test_avc_multimember_allocation.py::test_avc_redistributes_at_limit_as_passive_output_changes",
+        "tests/test_control_period_boundaries.py::test_agc_avc_run_with_independent_periods_and_avc_upper_boundaries",
+        "tests/test_control_measurement_quality.py::test_avc_rejects_voltage_target_until_first_measurement",
+        "tests/test_control_measurement_quality.py::test_avc_suspends_voltage_control_with_bad_measurement"
       ]
     }
   ]
