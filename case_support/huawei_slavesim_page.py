@@ -242,7 +242,8 @@ class HuaweiSlaveSimPage(SlaveSimPage):
     def apply_control(self, bus, station_id, kind, value):
         if kind not in {"percent", "fixed", "pf", "ratio", "active_gradient", "reactive_gradient"}:
             raise ValueError("不支持的华为模型控制类型；不发送未实现的启停命令")
-        with self._step(f"设置 {bus} / 站号 {station_id} 华为{kind}", expected=value) as entry:
+        expected = str(value) if isinstance(value, Decimal) else value
+        with self._step(f"设置 {bus} / 站号 {station_id} 华为{kind}", expected=expected) as entry:
             panel = self._panel(bus, station_id)
             control = panel.find_element(By.CSS_SELECTOR, f"input[name='{kind}']")
             self._replace(control, value)
