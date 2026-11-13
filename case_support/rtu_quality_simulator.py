@@ -28,7 +28,7 @@ class RtuQualitySimulator(SlaveSimPage):
             devices[role] = actual_device
         return devices
 
-    def _station(self, name, address, value):
+    def _station(self, name, address, value, *, count=1):
         bus = self._config_bus(name)
         self._open(bus)
         stations = bus.find_elements(By.CSS_SELECTOR, ":scope > details.slave-editor")
@@ -41,14 +41,22 @@ class RtuQualitySimulator(SlaveSimPage):
         bus = self._config_bus(name)
         Select(bus.find_element(By.CSS_SELECTOR, "select[name='device-type']")).select_by_value("__custom_modbus__")
         bus.find_element(By.XPATH, ".//button[normalize-space(.)='添加设备']").click()
-        station = self._unique(self._config_bus(name).find_elements(By.CSS_SELECTOR, ":scope > details.slave-editor"),
-                               "本例模拟从站")
-        self._open(station)
-        register = self._unique(station.find_elements(By.CSS_SELECTOR, "details.register-editor"), "本例模拟寄存器")
-        self._open(station.find_element(By.CSS_SELECTOR, "details.register-group"))
-        self._open(register)
-        self._replace(self._field(register, "协议地址"), address)
-        self._replace(self._field(register, "原始值"), value)
+        def station_editor():
+            editor = self._unique(self._config_bus(name).find_elements(
+                By.CSS_SELECTOR, ":scope > details.slave-editor"), "本例模拟从站")
+            self._open(editor)
+            return editor
+
+        for _ in range(1, count):
+            station_editor().find_element(By.XPATH, "./button[normalize-space(.)='新增寄存器']").click()
+        group = station_editor().find_element(By.CSS_SELECTOR, "details.register-group")
+        self._open(group)
+        registers = group.find_elements(By.CSS_SELECTOR, ":scope > details.register-editor")
+        assert len(registers) == count, f"本例模拟从站应有 {count} 个寄存器，实际 {len(registers)} 个"
+        for register_address, register in enumerate(registers, start=address):
+            self._open(register)
+            self._replace(self._field(register, "协议地址"), register_address)
+            self._replace(self._field(register, "原始值"), value)
 
     def _assert_mode(self, buses, role, address, value):
         bus = self._unique([bus for bus in buses if bus["name"] == self.names[role]], f"本例 {role} 总线")
@@ -57,10 +65,12 @@ class RtuQualitySimulator(SlaveSimPage):
             assert not bus["slaves"], f"静默阶段目标站仍存在：{bus!r}"
             return
         slave = self._unique(bus["slaves"], f"本例 {role} 从站")
-        reg = self._unique(slave["registers"], f"本例 {role} 寄存器")
-        assert (slave["station_id"], slave["fields"]["未配置地址"], reg["function"], reg["address"],
-                reg["type"], reg["source"], reg["byte_order"], int(reg["value"])) == (
-                    1, "exception", "0x03", address, "UINT16", "const", "AB", value), bus
+        assert (slave["station_id"], slave["fields"]["未配置地址"]) == (1, "exception"), bus
+        registers = [(reg["address"], reg["function"], reg["type"], reg["source"], reg["byte_order"], int(reg["value"]))
+                     for reg in slave["registers"]]
+        count = 2 if role == "target" else 1
+        assert sorted(registers) == [(offset, "0x03", "UINT16", "const", "AB", value)
+                                     for offset in range(address, address + count)], bus
 
     def prepare(self, check_paths):
         before = self._prepare_empty_configuration("品质场景准备前")
@@ -82,7 +92,7 @@ class RtuQualitySimulator(SlaveSimPage):
     def set_target(self, address, value, label):
         before = self._read_configuration(f"切换{label}前")
         self._check_owned_paths(before)
-        self._station(self.names["target"], address, value)
+        self._station(self.names["target"], address, value, count=2)
         actual = self._save_configuration(label, before=before, owned_names=(self.names["target"],),
                                           legacy_owned_names=self.link_paths)
         self._assert_mode(actual, "target", address, value)
@@ -100,12 +110,12 @@ class RtuQualitySimulator(SlaveSimPage):
             applied = max((i for i, row in enumerate(rows) if "Web 配置已保存并应用" in row), default=-1)
             if applied < 0:
                 return False
-            requests = [row for row in rows[applied + 1:] if f"[接收] {prefix}01 03 00 00 00 01 " in row]
+            requests = [row for row in rows[applied + 1:] if f"[接收] {prefix}01 03 00 00 00 02 " in row]
             if address is None:
                 return next((row for row in requests if "站号 1 未配置，已丢弃" in row), False)
             if not requests:
                 return False
-            frame = "01 03 02 00 64 " if address == 0 else "01 83 02 "
+            frame = "01 03 04 00 64 00 64 " if address == 0 else "01 83 02 "
             return next((row for row in rows[applied + 1:] if f"[发送] {prefix}{frame}" in row), False)
 
         with self._step("核对最新配置应用后的目标站实际 RTU 报文"):

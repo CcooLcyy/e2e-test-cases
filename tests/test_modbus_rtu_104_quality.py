@@ -78,7 +78,17 @@ def _prepare_rtu(context, role):
     connection, tag = f"{context.name}-{role}", f"{context.name}-{role}-rtu"
     page.create_connection(connection, context.paths[role], 9600, 8, 1, "N", 1, 1000)
     page.add_point(tag, deadband=1)
+    if role == "target":
+        sample_tag = f"{context.name}-sample-rtu"
+        page.add_point(sample_tag, address=1)
+        context.rtu_points["sample"] = (connection, sample_tag)
+        toolbar = "//div[contains(@class,'protocol-read-plan-toolbar')]"
+        page._click(page._button("生成批量方案", toolbar), "为两个同批采样点生成批量读取方案")
+        page._click(page._button("启用批量读取", toolbar), "启用目标站两个连续寄存器的批量读取")
     page.assert_saved_configuration()
+    if role == "target":
+        saved_plan = (By.XPATH, toolbar + "//*[normalize-space(.)='批量读取已启用']")
+        page._until(lambda _: page._visible(saved_plan), "目标站未保存批量读取策略")
     context.rtu_points[role] = (connection, tag)
     if role == "target":
         context.profile["rtu_tag"] = tag
@@ -94,7 +104,8 @@ def _import_iec104(context, role):
 
 
 def _verify_routes(context):
-    assert context.profile["target_ioa"] != context.profile["reference_ioa"], "IEC104 目标与参照 IOA 必须不同"
+    ioas = {context.profile[f"{role}_ioa"] for role in ("reference", "target", "sample")}
+    assert len(ioas) == 3, f"IEC104 参照、目标和同批采样点的 IOA 必须不同：{ioas!r}"
     context.iec104.check_routes()
 
 
@@ -119,25 +130,26 @@ def _measurement(master, ca, ioa):
 
 def _observation_step(index, label, quality):
     action = f"观察{label}的自发遥测"
-    expected = f"值 100，品质 0x{quality:02X}"
+    expected = f"目标和同批采样点均为 100，品质 0x{quality:02X}"
 
     def observe(context):
         master, profile = context.master, context.profile
-        last = None
+        last = {}
 
         def match():
-            nonlocal last
-            last = _measurement(master, profile["common_address"], profile["target_ioa"])
-            if last is None or int(last["frame_id"] or 0) <= context.frame_id:
-                return False
-            return last if int(last["cells"][4], 16) == quality else False
+            for role in ("target", "sample"):
+                last[role] = _measurement(master, profile["common_address"], profile[f"{role}_ioa"])
+            return dict(last) if all(
+                row and int(row["frame_id"] or 0) > context.frame_ids[role] and int(row["cells"][4], 16) == quality
+                for role, row in last.items()
+            ) else False
 
         with master.step(action, expected=expected) as step:
             try:
-                row = master.wait_for(match, f"未看到 {label} 的新遥测", timeout=profile["phase_timeout_seconds"])
+                rows = master.wait_for(match, f"未看到 {label} 的新遥测", timeout=profile["phase_timeout_seconds"])
             except TimeoutException:
                 evidence = {"阶段": label, "期望品质": f"0x{quality:02X}", "最后主站点表": last,
-                            "上个已通过报文编号": context.frame_id, "应答源状态": context.simulator_stage}
+                            "上个已通过报文编号": dict(context.frame_ids), "应答源状态": context.simulator_stage}
                 try:
                     upper = _target_row(context)
                     evidence["上位机目标行"] = upper.text if upper is not None else None
@@ -147,11 +159,12 @@ def _observation_step(index, label, quality):
                 master.metadata["RTU品质未观察到的阶段"] = evidence
                 raise AssertionError(f"等待{label}阶段超时，104 未观察到品质 0x{quality:02X} 的新遥测；"
                                      f"最后点表行：{last!r}。结合本例 slaveSim 工况记录区分工况未到和上送异常") from None
-            step["实际"] = row
-            context.observations.append(row)
-            assert int(row["cells"][2]) == 36, f"目标点须为带时标短浮点遥测：{row!r}"
-            assert Decimal(row["cells"][3]) == 100, f"目标值应保持 100：{row!r}"
-            context.frame_id = int(row["frame_id"])
+            step["实际"] = rows
+            context.observations.append(rows)
+            for role, row in rows.items():
+                assert int(row["cells"][2]) == 36, f"IOA={profile[f'{role}_ioa']} 须为带时标短浮点遥测：{row!r}"
+                assert Decimal(row["cells"][3]) == 100, f"IOA={profile[f'{role}_ioa']} 值应保持 100：{row!r}"
+                context.frame_ids[role] = int(row["frame_id"])
 
     return Step(f"quality.phase.{index}", action, expected, observe)
 
@@ -165,7 +178,9 @@ def _save_frames(master):
 
 def _assert_wire_sequence(frames, profile):
     decoded = [entry for frame in frames if (entry := decode_frame(frame)) is not None]
-    ca, ioa, reference = (profile[key] for key in ("common_address", "target_ioa", "reference_ioa"))
+    ca, target, sample, reference = (
+        profile[key] for key in ("common_address", "target_ioa", "sample_ioa", "reference_ioa"))
+    monitored = (target, sample)
 
     def gi(entry, direction, cot):
         return (entry["direction"] == direction and entry["type_id"] == 100 and entry["ca"] == ca
@@ -192,27 +207,35 @@ def _assert_wire_sequence(frames, profile):
                and isinstance(item["value"], (int, float)) and math.isfinite(item["value"])
                and not entry["negative"] and not entry["test"]
                for entry, item in gi_values), "总召报文中缺少正常参照遥测"
-    assert all(item["ioa"] != ioa for _, item in gi_values), "无首值目标点出现在总召响应中"
-    assert all(item["ioa"] != ioa for _, item in points(decoded[:terminations[0] + 1], 3)), (
-        "初始无样本阶段收到了目标点自发上送")
+    assert all(item["ioa"] not in monitored for _, item in gi_values), "无首值点出现在总召响应中"
+    assert all(item["ioa"] not in monitored for _, item in points(decoded[:terminations[0] + 1], 3)), (
+        "初始无样本阶段收到了无首值点的自发上送")
 
-    sequence = []
+    sequences = {ioa: [] for ioa in monitored}
+    last_good_sample = None
     for entry, item in points(decoded[terminations[0] + 1:], 3):
-        if item["ioa"] != ioa:
+        ioa = item["ioa"]
+        if ioa not in sequences:
             continue
+        sequence = sequences[ioa]
         assert entry["type_id"] == 36 and not entry["negative"] and not entry["test"], (
-            f"目标点不是正常传送的带时标短浮点遥测：{entry!r}")
-        assert item["value"] == 100, f"目标遥测数值发生变化：{item!r}"
-        assert item["timestamp"], f"目标遥测缺少 CP56Time2a 时标：{item!r}"
+            f"IOA={ioa} 不是正常传送的带时标短浮点遥测：{entry!r}")
+        assert item["value"] == 100, f"IOA={ioa} 遥测数值发生变化：{item!r}"
+        assert item["timestamp"], f"IOA={ioa} 遥测缺少 CP56Time2a 时标：{item!r}"
         if not sequence or item["quality"] != sequence[-1]["quality"]:
             sequence.append(item)
         elif item["quality"] in (0x40, 0xC0):
             assert item["timestamp"] == sequence[-1]["timestamp"], f"重复故障报文刷新了采样时标：{item!r}"
-    assert [item["quality"] for item in sequence] == [flags for _, flags in PHASES], (
-        f"自发遥测品质顺序不符：{sequence!r}")
-    assert sequence[1]["timestamp"] == sequence[2]["timestamp"], "两次故障沿用的样本时标不同"
-    assert sequence[3]["timestamp"] != sequence[2]["timestamp"], "恢复后未刷新样本时标"
-    return sequence
+        if ioa == sample and len(sequence) == 1 and item["quality"] == 0:
+            last_good_sample = item["timestamp"]
+    for ioa, sequence in sequences.items():
+        assert [item["quality"] for item in sequence] == [flags for _, flags in PHASES], (
+            f"IOA={ioa} 自发遥测品质顺序不符：{sequence!r}")
+        assert sequence[1]["timestamp"] == last_good_sample, (
+            f"IOA={ioa} 首次超时时标 {sequence[1]['timestamp']} 应等于最后一次正常批量采样时标 {last_good_sample}")
+        assert sequence[1]["timestamp"] == sequence[2]["timestamp"], f"IOA={ioa} 两次故障沿用的样本时标不同"
+        assert sequence[3]["timestamp"] != sequence[2]["timestamp"], f"IOA={ioa} 恢复后未刷新样本时标"
+    return {"目标点": sequences[target], "同批采样点": sequences[sample], "最后一次正常采样时标": last_good_sample}
 
 
 def _prepare_master_target(context):
@@ -222,20 +245,22 @@ def _prepare_master_target(context):
 
 def _check_initial_table(context):
     master, profile = context.master, context.profile
-    with master.step("检查总召结束时的初始点表", expected="参照点正常，目标点缺席") as step:
+    with master.step("检查总召结束时的初始点表", expected="参照点正常，目标和同批采样点缺席") as step:
         reference = _measurement(master, profile["common_address"], profile["reference_ioa"])
         target = _measurement(master, profile["common_address"], profile["target_ioa"])
-        step["实际"] = {"参照点": reference, "目标点": target}
+        sample = _measurement(master, profile["common_address"], profile["sample_ioa"])
+        step["实际"] = {"参照点": reference, "目标点": target, "同批采样点": sample}
         assert reference and int(reference["cells"][4], 16) == 0, "缺少正常参照点，请检查专用线路"
-        assert target is None, f"目标点已有样本或初始无应答窗口不足：{target!r}"
-    context.frame_id = 0
+        assert target is None and sample is None, f"目标或同批采样点已有样本：{step['实际']!r}"
+    context.frame_ids = dict.fromkeys(("target", "sample"), 0)
     context.observations = []
     master.metadata["RTU品质阶段观察"] = context.observations
 
 
 def _verify_frames(context):
     master, profile = context.master, context.profile
-    with master.step("核对原始总召及自发遥测报文", expected="总召省略目标，随后品质依次为 00、40、C0、00") as step:
+    with master.step("核对原始总召及自发遥测报文",
+                     expected="无首值点缺席，品质依次为 00、40、C0、00，首次超时沿用最后正常采样时标") as step:
         frames = _save_frames(master)
         step["实际"] = f"已保留 {len(frames)} 条收发报文，待核对"
         sequence = _assert_wire_sequence(frames, profile)
@@ -260,15 +285,17 @@ PREPARE_SCENARIO = (
     Step("quality.rtu.reference", "创建并核对本例参照 RTU 点",
          "参照 RTU 连接与点表使用参照总线的实际设备、站号 1、保持寄存器 0 和正死区",
          lambda context: _prepare_rtu(context, "reference")),
-    Step("quality.rtu.target", "创建并核对本例目标 RTU 点",
-         "目标 RTU 连接与点表使用目标总线的实际设备、站号 1、保持寄存器 0 和正死区",
+    Step("quality.rtu.target", "创建并核对本例目标 RTU 点与同批采样点",
+         "目标站保持寄存器 0 为正死区，寄存器 1 为零死区，两个点使用同一批量读请求",
          lambda context: _prepare_rtu(context, "target")),
     Step("quality.iec104.create", "建立本例带时标 IEC104 被控站", "页面显示本例独立链路及监听端口", _create_iec104),
     Step("quality.iec104.reference", "导入参照 RTU 点为 IEC104 短浮点遥测", "参照点的 IOA 在点表显示",
          lambda context: _import_iec104(context, "reference")),
     Step("quality.iec104.target", "导入目标 RTU 点为 IEC104 短浮点遥测", "目标点的 IOA 在点表显示",
          lambda context: _import_iec104(context, "target")),
-    Step("quality.iec104.routes", "在数据总线核对本例遥测路由", "参照与目标均按 RTU 到 IEC104 的方向路由", _verify_routes),
+    Step("quality.iec104.sample", "导入同批采样 RTU 点为 IEC104 短浮点遥测", "同批采样点的 IOA 在点表显示",
+         lambda context: _import_iec104(context, "sample")),
+    Step("quality.iec104.routes", "在数据总线核对本例遥测路由", "三个点均按 RTU 到 IEC104 的方向路由", _verify_routes),
     Step("quality.iec104.start", "启动本例 IEC104 被控站", "本例链路进入运行中",
          lambda context: context.iec104.start()),
     Step("quality.rtu.poll", "启动本例参照及目标 RTU 轮询",
@@ -281,7 +308,7 @@ INITIAL_SESSION = (
          lambda context: context.master.connect()),
     Step("quality.gi", "在当前会话发起总召", "总召确认终止，主站实时显示正常",
          lambda context: context.master.interrogate()),
-    Step("quality.gi.table", "检查总召结束时的初始点表", "参照点正常，目标点缺席", _check_initial_table),
+    Step("quality.gi.table", "检查总召结束时的初始点表", "参照点正常，目标和同批采样点缺席", _check_initial_table),
 )
 
 
@@ -292,8 +319,8 @@ def _drive_target(index, label, address, value, expected):
     return Step(f"quality.sim.phase.{index}", f"设置目标站工况：{label}", f"{expected}，两路实际设备路径保持不变", drive)
 
 
-SIMULATOR_EXPECTED = ("目标站在地址 0 正常应答 100", "目标站不存在，读取无应答",
-                      "目标站存在但未配置地址 0，读取应答异常码 0x02", "目标站恢复在地址 0 应答同值 100")
+SIMULATOR_EXPECTED = ("目标站的地址 0 和 1 批量应答 100、100", "目标站不存在，读取无应答",
+                      "目标站未配置地址 0，批量读取应答异常码 0x02", "目标站恢复批量应答 100、100")
 OBSERVATIONS = tuple(
     step
     for index, ((label, quality), (address, value), expected) in enumerate(
@@ -301,7 +328,8 @@ OBSERVATIONS = tuple(
     for step in (_drive_target(index, label, address, value, expected), _observation_step(index, label, quality))
 )
 VERIFY_FRAMES = Step("quality.frames", "核对原始总召及自发遥测报文",
-                     "总召省略目标，品质依次为 00、40、C0、00，故障沿用样本时标且恢复后刷新", _verify_frames)
+                     "总召省略无首值点，品质依次为 00、40、C0、00，首次超时沿用最后正常采样时标，恢复刷新",
+                     _verify_frames)
 
 
 def _cleanup_upper(context):
@@ -368,10 +396,10 @@ def _cleanup(context, request, failure):
            MASTER104_START, *INITIAL_SESSION, *OBSERVATIONS, VERIFY_FRAMES,
            UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH, MASTER104_FINISH, DESKTOP_FINISH)
 @execution_logic("""
-1. 登录上位机并连接现场下位机，清除 slaveSim 原有总线，重建参照和目标两路串口。参照站正常应答 100，目标站初始无应答。从运行页读取两路「实际设备」，确认未被既有 RTU 连接使用后创建两个 RTU 采集点，设置正死区，导入专用 IEC104 被控站为带时标短浮点遥测，核对两个点的 IOA 和数据总线路由，启动链路与轮询。
-2. 用独立 IEC104 主站建立会话，收到 STARTDT 确认后发起总召。核对主站点表和原始报文中参照点有效，目标点在总召响应及总召结束前的自发遥测中均缺席。
+1. 登录上位机并连接现场下位机，清除 slaveSim 原有总线，重建参照和目标两路串口。参照站正常应答 100，目标站初始无应答。核对实际串口后创建参照点、正死区目标点及零死区同批采样点。目标站两个连续保持寄存器启用批量读取。把三个点导入专用 IEC104 被控站为带时标短浮点遥测，回读 IOA 和数据总线路由后启动链路与轮询。
+2. 用独立 IEC104 主站建立会话，收到 STARTDT 确认后发起总召。核对主站点表和原始报文中参照点有效，目标和同批采样点在总召响应及总召结束前的自发遥测中均缺席。
 3. 依次将目标站切为正常应答 100、无应答、异常应答 0x02、恢复应答 100。每次切换后确认两路实际设备路径保持不变，在 slaveSim 报文中确认工况实际生效，并在主站等待新的目标自发遥测。每轮值均为 100，品质依次为正常（0x00）、NT（0x40）、IV+NT（0xC0）、恢复正常（0x00）。
-4. 保存并复核原始报文。核对总召肯定确认和终止、目标遥测的传送类型及 CP56Time2a 时标。两种故障沿用相同时标，重复故障不刷新，恢复后时标更新。失败时保留现场和报文，随后清理本例 IEC104、RTU 和路由配置，清空 slaveSim 总线并回读确认。
+4. 保存并复核原始报文。核对总召肯定确认和终止、遥测传送类型及 CP56Time2a。使用零死区点观察最后一次正常批量采样时标，要求目标和同批采样点首次超时均沿用该时标。两种故障时标一致，重复故障不刷新，恢复后时标更新。失败时保留现场和报文，随后清理本例 IEC104、RTU 和路由配置，清空 slaveSim 总线并回读确认。
 """)
 def test_rtu_quality_reaches_iec104_with_unchanged_value(request):
     """RTU 值不变时 IEC104 品质上送"""
