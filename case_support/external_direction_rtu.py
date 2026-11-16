@@ -8,8 +8,9 @@ from .modbus_rtu_page import ModbusRtuPage
 
 DIRECTION_TAGS = {"increase": "increase-block", "decrease": "decrease-block"}
 DIRECTION_BITS = {"increase": 0, "decrease": 1}
+INCREASE_LOCK_POINT = ("禁止增出力遥信（可选）", DIRECTION_TAGS["increase"])
 LOCK_POINTS = (
-    ("禁止增出力遥信（可选）", DIRECTION_TAGS["increase"]),
+    INCREASE_LOCK_POINT,
     ("禁止减出力遥信（可选）", DIRECTION_TAGS["decrease"]),
 )
 

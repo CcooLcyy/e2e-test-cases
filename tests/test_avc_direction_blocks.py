@@ -23,6 +23,7 @@ from case_support.measurement_expiry_run import (
 from case_support.measurement_expiry_simulator import MeasurementExpirySimulator
 from case_support.modbus_rtu_page import ModbusRtuPage
 from case_support.power_range_run import _environment, _load_account, _save_frames
+from case_support.single_block_forwarding import forwarding_phase, prepare_single_block_forwarding
 
 
 pytestmark = [pytest.mark.case_group("AVC 控制"), pytest.mark.requires_modbus]
@@ -127,6 +128,11 @@ PREPARE = (
     Step("avc.direction.104", "从 AVC 默认点导入 IEC104 增减闭锁遥信并配置遥调",
          "可选中 AVC增闭锁、AVC减闭锁，保存单点遥信及路由并读回 IOA", _prepare_104),
 )
+SINGLE_OUTPUT_PREPARE = (
+    *PREPARE[:-1],
+    Step("avc.direction.single-output.104", "只导入 AVC 增闭锁遥信并配置总无功遥调",
+         "专用 IEC104 点表及路由各只有一路遥信和一路遥调", prepare_single_block_forwarding),
+)
 CONNECT = Step("avc.direction.connect", "连接 IEC104 主站并启动 AVC 控制组", "主站会话和控制组均运行", _connect)
 PHASES = (
     _phase("initial", "遥调总无功 50 kvar，建立两台均可增减的基线", 50, 25, 25),
@@ -137,6 +143,12 @@ PHASES = (
     _phase("reverse", "反向上调至 50 kvar，核对减闭锁解除", 50, 25, 25),
 )
 CAPTURE = Step("avc.direction.capture", "保存模拟主站原始报文", "本例 IEC104 报文已留存")
+SINGLE_OUTPUT_PHASES = (
+    forwarding_phase("avc.direction", "baseline", 50, 25, 25, increase=False, decrease=False),
+    forwarding_phase("avc.direction", "upper", 130, 30, 100, increase=True, decrease=False),
+    forwarding_phase("avc.direction", "lower", 20, 10, 10, increase=False, decrease=True),
+    forwarding_phase("avc.direction", "upper-again", 130, 30, 100, increase=True, decrease=False),
+)
 
 
 @case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *PREPARE,
@@ -152,6 +164,24 @@ CAPTURE = Step("avc.direction.capture", "保存模拟主站原始报文", "本�
 """)
 def test_avc_reports_direction_blocks_when_all_members_reach_limits(request):
     """AVC 单成员到限后重新分配与全站增减闭锁"""
+    _run_avc_blocks(request, PREPARE, PHASES)
+
+
+@case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *SINGLE_OUTPUT_PREPARE,
+           MASTER104_START, CONNECT, *SINGLE_OUTPUT_PHASES, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
+           MASTER104_FINISH, DESKTOP_FINISH)
+@execution_logic("""
+1. 建立双成员 AVC 总无功控制组，配置专用 IEC104 链路，仅选择 AVC增闭锁遥信并配总无功遥调。
+2. 遥调 50、130、20、130 kvar，核对实际 RTU 写入和应答，以及两个本地闭锁状态和运行摘要中的质量。
+3. 本地减闭锁置位时未配置该方向转发。检查完整收发报文，只允许已选的增闭锁作为监视报文出现。
+4. 各轮总召核对实际收到有效增闭锁，变化轮次还须收到有效自发报文。记录现场和报文后清理。
+""")
+def test_avc_forwards_only_selected_increase_block(request):
+    """AVC 只选择转发增闭锁，减闭锁保持本地"""
+    _run_avc_blocks(request, SINGLE_OUTPUT_PREPARE, SINGLE_OUTPUT_PHASES)
+
+
+def _run_avc_blocks(request, prepare, phases):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -172,9 +202,9 @@ def test_avc_reports_direction_blocks_when_all_members_reach_limits(request):
         context.simulator = simulator
         failure = None
         try:
-            run_steps(request, PREPARE, context)
+            run_steps(request, prepare, context)
             context.master = request.getfixturevalue("master104")
-            run_steps(request, (CONNECT, *PHASES), context)
+            run_steps(request, (CONNECT, *phases), context)
             with track_fixture_step(request, CAPTURE):
                 _save_frames(context.master)
         except BaseException as error:

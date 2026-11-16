@@ -23,6 +23,7 @@ from case_support.measurement_expiry_run import (
 from case_support.measurement_expiry_simulator import MeasurementExpirySimulator
 from case_support.modbus_rtu_page import ModbusRtuPage
 from case_support.power_range_run import _environment, _load_account, _save_frames
+from case_support.single_block_forwarding import forwarding_phase, prepare_single_block_forwarding
 
 
 pytestmark = [pytest.mark.case_group("AGC 控制"), pytest.mark.requires_modbus]
@@ -51,7 +52,8 @@ def _connect(context):
     context.master.connect()
     context.sender = Master104CommandSender(context.master, mapping["ca"], mapping["target_ioa"])
     context.observer = Master104PointObserver(
-        context.master, {"increase": mapping["increase_ioa"], "decrease": mapping["decrease_ioa"]}, mapping["ca"],
+        context.master, {key: mapping[f"{key}_ioa"] for key in ("increase", "decrease") if f"{key}_ioa" in mapping},
+        mapping["ca"],
     )
     context.group.start()
 
@@ -124,6 +126,11 @@ PREPARE = (
          "两台成员的调节范围为 10～20 和 10～100 kW", _prepare_group),
     Step("agc.multiblock.104", "建立专用 IEC104 遥调与增减闭锁遥信", "读回点号及路由，链路已启动", _prepare_104),
 )
+SINGLE_OUTPUT_PREPARE = (
+    *PREPARE[:-1],
+    Step("agc.multiblock.single-output.104", "只导入 AGC 增闭锁遥信并配置总有功遥调",
+         "专用 IEC104 点表及路由各只有一路遥信和一路遥调", prepare_single_block_forwarding),
+)
 CONNECT = Step("agc.multiblock.connect", "连接主站并启动本例 AGC 控制组", "主站连接且两台成员均通信正常", _connect)
 UPPER_REDISTRIBUTION = (
     _phase("initial", "遥调 56 kW 建立两台均未到限的基线", 56, 16, 40),
@@ -141,11 +148,17 @@ LOWER_REDISTRIBUTION = (
     _phase("lower-reverse", "反向遥调 56 kW，检查减闭锁解除", 56, 16, 40),
 )
 CAPTURE = Step("agc.multiblock.capture", "保存模拟主站原始报文", "保留本例 IEC104 收发报文")
+SINGLE_OUTPUT_PHASES = (
+    forwarding_phase("agc.multiblock", "baseline", 56, 16, 40, increase=False, decrease=False),
+    forwarding_phase("agc.multiblock", "upper", 120, 20, 100, increase=True, decrease=False),
+    forwarding_phase("agc.multiblock", "lower", 20, 10, 10, increase=False, decrease=True),
+    forwarding_phase("agc.multiblock", "upper-again", 120, 20, 100, increase=True, decrease=False),
+)
 
 
-def _multiblock_plan(phases):
+def _multiblock_plan(phases, *, prepare=PREPARE):
     return case_plan(
-        ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *PREPARE,
+        ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *prepare,
         MASTER104_START, CONNECT, *phases, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
         MASTER104_FINISH, DESKTOP_FINISH,
     )
@@ -178,7 +191,19 @@ def test_agc_partial_lower_limit_redistributes_without_group_block(request):
     _run_multiblock(request, LOWER_REDISTRIBUTION)
 
 
-def _run_multiblock(request, phases):
+@_multiblock_plan(SINGLE_OUTPUT_PHASES, prepare=SINGLE_OUTPUT_PREPARE)
+@execution_logic("""
+1. 建立双成员 AGC 控制组，配置专用 IEC104 链路，仅选择 AGC增闭锁遥信并配总有功遥调。
+2. 遥调 56、120、20、120 kW，核对实际 RTU 写入和应答，以及两个本地闭锁状态和质量。
+3. 本地减闭锁置位时未配置该方向转发。检查完整收发报文，只允许已选的增闭锁作为监视报文出现。
+4. 各轮总召核对实际收到有效增闭锁，变化轮次还须收到有效自发报文。记录现场和报文后清理。
+""")
+def test_agc_forwards_only_selected_increase_block(request):
+    """AGC 只选择转发增闭锁，减闭锁保持本地"""
+    _run_multiblock(request, SINGLE_OUTPUT_PHASES, prepare=SINGLE_OUTPUT_PREPARE)
+
+
+def _run_multiblock(request, phases, *, prepare=PREPARE):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -198,7 +223,7 @@ def _run_multiblock(request, phases):
         context.simulator = simulator
         failure = None
         try:
-            run_steps(request, PREPARE, context)
+            run_steps(request, prepare, context)
             context.master = request.getfixturevalue("master104")
             run_steps(request, (CONNECT, *phases), context)
             with track_fixture_step(request, CAPTURE):

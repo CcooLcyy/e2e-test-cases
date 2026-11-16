@@ -16,8 +16,8 @@ from testbench.master104_commands import Master104CommandSender
 from case_support.avc_period_page import GROUP, MEMBER, SUMMARY, AvcPeriodPage
 from case_support.case_metadata import execution_logic
 from case_support.external_direction_rtu import (
-    LOCK_POINTS, ExternalDirectionRtuPage, check_external_allocation, prepare_external_control_rtu,
-    set_external_direction,
+    INCREASE_LOCK_POINT, LOCK_POINTS, ExternalDirectionRtuPage, check_external_allocation,
+    prepare_external_control_rtu, set_external_direction,
 )
 from case_support.login_plan import login_steps
 from case_support.measurement_expiry_run import SIM_CLEANUP, UPPER_CLEANUP, _cleanup
@@ -30,14 +30,15 @@ from case_support.rtu_quality_iec104 import RtuQualityIec104
 pytestmark = [pytest.mark.case_group("AVC 控制"), pytest.mark.requires_modbus]
 
 class AvcExternalBlockPage(AvcPeriodPage):
-    def __init__(self, desktop):
+    def __init__(self, desktop, bound_points=LOCK_POINTS):
         super().__init__(desktop)
         self.lock_connection = None
+        self.bound_points = bound_points
 
     def _bind_member(self, label, connection, tag):
         super()._bind_member(label, connection, tag)
         if label == "无功设定点" and connection == self.lock_connection:
-            for lock_label, lock_tag in LOCK_POINTS:
+            for lock_label, lock_tag in self.bound_points:
                 super()._bind_member(lock_label, connection, lock_tag)
 
     def verify_lock_bindings(self):
@@ -47,7 +48,8 @@ class AvcExternalBlockPage(AvcPeriodPage):
         for member in ("A", "B"):
             self._click((By.XPATH, GROUP + f"//button[@aria-label='编辑成员 {member}']"), f"读回 {member} 的外部闭锁配置")
             for label, tag in LOCK_POINTS:
-                expected = f"ModbusRTU / {self.lock_connection} / {tag}" if member == "A" else ""
+                bound = member == "A" and (label, tag) in self.bound_points
+                expected = f"ModbusRTU / {self.lock_connection} / {tag}" if bound else ""
                 locator = (By.XPATH, MEMBER + "//input[@aria-label=" + xpath_text(label) + "]"
                            "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][1]")
                 control = self._until(lambda _: self._visible(locator), f"AVC 闭锁遥信未显示：{label}")
@@ -110,24 +112,38 @@ SIM_START = Step("avc.external-block.sim.start", "打开本例 slaveSim", "可�
 SIM_FINISH = Step("avc.external-block.sim.finish", "关闭本例 slaveSim", "独立浏览器会话已关闭")
 LOGIN = (Step("avc.external-block.account", "读取测试账号", "专用账号配置有效", _load_account),
          *login_steps("avc.external-block.login"))
+PREPARE_RTU = Step("avc.external-block.rtu", "建立无功设点、电压量测和 A 的两路 RTU 遥信",
+                   "A/B 的量测、写入点和 A 的两路 BOOL 遥信就绪",
+                   lambda context: prepare_external_control_rtu(context, {"A": (20, 0), "B": (20, 0), "V": (220,)}))
+PREPARE_104 = Step("avc.external-block.104", "建立专用 IEC104 总无功遥调", "遥调点和业务路由已保存", _prepare_104)
 PREPARE = (
-    Step("avc.external-block.rtu", "建立无功设点、电压量测和 A 的两路 RTU 遥信",
-         "A/B 的量测、写入点和 A 的两路 BOOL 遥信就绪",
-         lambda context: prepare_external_control_rtu(context, {"A": (20, 0), "B": (20, 0), "V": (220,)})),
+    PREPARE_RTU,
     Step("avc.external-block.group", "创建 AVC 组并配置 A 的两路可选外部闭锁输入",
          "两路遥信均能绑定并读回，B 无需配置闭锁输入", _prepare_group),
-    Step("avc.external-block.104", "建立专用 IEC104 总无功遥调", "遥调点和业务路由已保存", _prepare_104),
+    PREPARE_104,
+)
+PREPARE_INCREASE_ONLY = (
+    PREPARE_RTU,
+    Step("avc.external-block.group-increase-only", "创建 AVC 组，只绑定 A 的禁止上调遥信",
+         "A 的禁止上调绑定可读回，禁止下调留空，B 两路都留空", _prepare_group),
+    PREPARE_104,
 )
 CONNECT = Step("avc.external-block.connect", "连接主站并启动 AVC 控制组", "主站连接且控制组运行", _connect)
-PHASES = (
+CHECK_INCREASE = (
     _phase("baseline", "遥调 80 kvar，建立正常分配基线", {"A": 40, "B": 40}, target=80),
     _phase("increase", "禁止 A 上调，遥调 100 kvar，由未闭锁的 B 接手增量",
            {"A": 40, "B": 60}, target=100, signal=("increase", True)),
-    _phase("increase-reverse", "仍禁止 A 上调，遥调 60 kvar，核对允许 A 下调",
-           {"A": 30, "B": 30}, target=60),
+)
+CHECK_INCREASE_RELEASE = (
     _phase("increase-hold", "仍禁止 A 上调，遥调 80 kvar，核对 A 保持新的设定",
            {"A": 30, "B": 50}, target=80),
     _phase("increase-release", "解除 A 增闭锁并保持原总目标", {"A": 40, "B": 40}, signal=("increase", False)),
+)
+PHASES = (
+    *CHECK_INCREASE,
+    _phase("increase-reverse", "仍禁止 A 上调，遥调 60 kvar，核对允许 A 下调",
+           {"A": 30, "B": 30}, target=60),
+    *CHECK_INCREASE_RELEASE,
     _phase("decrease", "禁止 A 下调，遥调 60 kvar，由未闭锁的 B 接手减量",
            {"A": 40, "B": 20}, target=60, signal=("decrease", True)),
     _phase("decrease-reverse", "仍禁止 A 下调，遥调 100 kvar，核对允许 A 上调",
@@ -136,12 +152,25 @@ PHASES = (
            {"A": 50, "B": 30}, target=80),
     _phase("decrease-release", "解除 A 减闭锁并保持原总目标", {"A": 40, "B": 40}, signal=("decrease", False)),
 )
+PHASES_INCREASE_ONLY = (
+    *CHECK_INCREASE,
+    Step("avc.external-block.set-unbound-decrease", "保持增闭锁，置位未绑定的禁止下调遥信",
+         "RTU 采集两路遥信均为真，只有增闭锁已绑定",
+         lambda context: set_external_direction(context, "decrease", True)),
+    _phase("unbound-decrease-allowed", "遥调 60 kvar，验证未绑定的遥信置位时 A 仍可下调",
+           {"A": 30, "B": 30}, target=60),
+    *CHECK_INCREASE_RELEASE,
+)
 CAPTURE = Step("avc.external-block.capture", "保存模拟主站原始报文", "已保留本例 IEC104 收发报文")
 
 
-@case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *PREPARE,
-           MASTER104_START, CONNECT, *PHASES, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
-           MASTER104_FINISH, DESKTOP_FINISH)
+def _external_block_plan(prepare, phases):
+    return case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *prepare,
+                     MASTER104_START, CONNECT, *phases, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
+                     MASTER104_FINISH, DESKTOP_FINISH)
+
+
+@_external_block_plan(PREPARE, PHASES)
 @execution_logic("""
 1. 创建两台等权 AVC 成员，各自可调范围为 10～100 kvar。仅给 A 绑定两路可选 Modbus RTU 闭锁遥信并读回。
 2. IEC104 遥调 80 kvar 建立 40/40 kvar 基线。禁止 A 上调后，验证 B 接手增量、A 仍能下调。
@@ -151,6 +180,23 @@ CAPTURE = Step("avc.external-block.capture", "保存模拟主站原始报文", "
 """)
 def test_avc_external_member_direction_block_redistributes_and_recovers(request):
     """AVC 外部遥信只闭锁指定成员及方向，解除后恢复分配"""
+    _run_external_block(request, PREPARE, PHASES)
+
+
+@_external_block_plan(PREPARE_INCREASE_ONLY, PHASES_INCREASE_ONLY)
+@execution_logic("""
+1. 建立两台等权 AVC 成员。A 只绑定禁止上调遥信，禁止下调留空，B 两路都留空。保存并逐项读回。
+2. 先建立 40/40 kvar 基线；置位 A 的禁止上调并遥调 100 kvar，核对 A 保持 40 kvar、B 承担 60 kvar。
+3. 保持增闭锁并置位未绑定的禁止下调遥信，确认 RTU 实收两路为真。下调目标至 60 kvar，两台应各收到 30 kvar。
+4. 再遥调 80 kvar，A 保持 30 kvar、B 承担 50 kvar。仅解除增闭锁，维持原总目标，核对自动恢复各 40 kvar。
+5. 核对实际 RTU 写请求、应答和寄存器。保存 IEC104 报文及失败现场，再清理本例资源。
+""")
+def test_avc_only_bound_increase_block_restricts_member(request):
+    """AVC 只绑定外部增闭锁后下调仍可用"""
+    _run_external_block(request, PREPARE_INCREASE_ONLY, PHASES_INCREASE_ONLY, bound_points=(INCREASE_LOCK_POINT,))
+
+
+def _run_external_block(request, prepare, phases, *, bound_points=LOCK_POINTS):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -160,7 +206,7 @@ def test_avc_external_member_direction_block_redistributes_and_recovers(request)
     rtu = ExternalDirectionRtuPage(desktop)
     context = SimpleNamespace(
         name=name, module="AVC", timeout=timeout, desktop=desktop, page=PlatformLoginPage(desktop),
-        rtu=rtu, group=AvcExternalBlockPage(desktop), iec104=RtuQualityIec104(rtu, name),
+        rtu=rtu, group=AvcExternalBlockPage(desktop, bound_points), iec104=RtuQualityIec104(rtu, name),
         target_tag=f"{name}-target", master=None, sim_started=False, previous={},
     )
     run_steps(request, LOGIN, context)
@@ -171,9 +217,9 @@ def test_avc_external_member_direction_block_redistributes_and_recovers(request)
         context.simulator = simulator
         failure = None
         try:
-            run_steps(request, PREPARE, context)
+            run_steps(request, prepare, context)
             context.master = request.getfixturevalue("master104")
-            run_steps(request, (CONNECT, *PHASES), context)
+            run_steps(request, (CONNECT, *phases), context)
             with track_fixture_step(request, CAPTURE):
                 _save_frames(context.master)
         except BaseException as error:

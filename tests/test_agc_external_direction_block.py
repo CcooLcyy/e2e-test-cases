@@ -16,8 +16,8 @@ from testbench.master104_commands import Master104CommandSender
 from case_support.agc_direction_iec104 import AgcDirectionIec104
 from case_support.case_metadata import execution_logic
 from case_support.external_direction_rtu import (
-    LOCK_POINTS, ExternalDirectionRtuPage, check_external_allocation, prepare_external_control_rtu,
-    set_external_direction,
+    INCREASE_LOCK_POINT, LOCK_POINTS, ExternalDirectionRtuPage, check_external_allocation,
+    prepare_external_control_rtu, set_external_direction,
 )
 from case_support.login_plan import login_steps
 from case_support.measurement_expiry_agc import MeasurementExpiryAgc
@@ -48,16 +48,16 @@ class ExternalBlockAgcPage(MeasurementExpiryAgc):
         self._draft_opened = True
         self._members_tab()
 
-    def configure_external_blocks(self):
+    def configure_external_blocks(self, bound_points=LOCK_POINTS):
         self._open_group_for_external_block()
         self._open_member_for_external_block("A")
         connection_name = self.members["A"]
         source = f"ModbusRTU / {connection_name}"
-        for label, tag in LOCK_POINTS:
+        for label, tag in bound_points:
             self._selected_binding(label)
             self._choose(self.MEMBER_DIALOG, f"{label}连接", source, search=connection_name, accessible_name=True)
             self._choose(self.MEMBER_DIALOG, label, f"{source} / {tag}", search=tag, accessible_name=True)
-        self._click(self._button("确认成员", self.MEMBER_DIALOG), "确认成员 A 的增减闭锁输入")
+        self._click(self._button("确认成员", self.MEMBER_DIALOG), "确认成员 A 的外部闭锁输入")
         self._wait_dialog_closed(self.MEMBER_DIALOG, "确认成员")
         self._submit_group("保存 AGC 控制组的外部遥信路由")
 
@@ -65,7 +65,7 @@ class ExternalBlockAgcPage(MeasurementExpiryAgc):
         for name in ("A", "B"):
             self._open_member_for_external_block(name)
             for label, tag in LOCK_POINTS:
-                expected = f"{source} / {tag}" if name == "A" else ""
+                expected = f"{source} / {tag}" if name == "A" and (label, tag) in bound_points else ""
                 self.desktop.check(f"核对 AGC 成员 {name} 保存的{label}", self._selected_binding(label), expected)
             self._close_draft(self.MEMBER_DIALOG, "取消编辑")
         self._close_draft(self.GROUP_DIALOG, "取消")
@@ -134,34 +134,63 @@ LOGIN = (
     Step("agc.external.account", "读取测试账号", "专用账号配置有效", _load_account),
     *login_steps("agc.external.login"),
 )
-PREPARE = (
+PREPARE_MEMBERS = (
     Step("agc.external.rtu", "搭建两个 RTU 成员和 A 的两路外部闭锁遥信", "已回读 BOOL 点表、实际串口和初始量测",
          lambda context: prepare_external_control_rtu(context, {"A": (40, 0), "B": (40, 0)})),
     Step("agc.external.group", "保存包含 A 和 B 的等权 AGC 控制组", "组和两个成员的业务路由已读回", _prepare_group),
+)
+PREPARE_104 = Step("agc.external.iec104", "建立并启动 IEC104 遥调连接", "回读专用总有功遥调点和路由", _prepare_104)
+PREPARE = (
+    *PREPARE_MEMBERS,
     Step("agc.external.bind", "仅绑定成员 A 的可选增减闭锁遥信", "A 的两路遥信保存并读回，B 保持未绑定",
          lambda context: context.group.configure_external_blocks()),
-    Step("agc.external.iec104", "建立并启动 IEC104 遥调连接", "回读专用总有功遥调点和路由", _prepare_104),
+    PREPARE_104,
+)
+PREPARE_INCREASE_ONLY = (
+    *PREPARE_MEMBERS,
+    Step("agc.external.bind-increase-only", "只绑定成员 A 的禁止上调遥信",
+         "A 的禁止上调绑定可读回，禁止下调留空，B 两路都留空",
+         lambda context: context.group.configure_external_blocks((INCREASE_LOCK_POINT,))),
+    PREPARE_104,
 )
 CONNECT = Step("agc.external.connect", "连接主站并启动 AGC 组", "连接建立且两成员均通信正常", _connect)
-CHECKS = (
+CHECK_INCREASE = (
     _target("baseline", "遥调 80 kW，核对闭锁位未置位时两台等分", 80, 40, 40),
     _enable("increase", "A 的禁止增出力遥信"),
     _target("increase-blocked", "遥调 120 kW，验证 B 接手全部增量", 120, 40, 80),
-    _target("decrease-allowed", "在增闭锁仍有效时遥调 60 kW，验证 A 可以下调", 60, 30, 30),
+)
+CHECK_INCREASE_RELEASE = (
     _target("increase-before-release", "遥调 100 kW，保持 A 增闭锁", 100, 30, 70),
     _release("increase", "A 的禁止增出力遥信", 50),
+)
+CHECKS = (
+    *CHECK_INCREASE,
+    _target("decrease-allowed", "在增闭锁仍有效时遥调 60 kW，验证 A 可以下调", 60, 30, 30),
+    *CHECK_INCREASE_RELEASE,
     _enable("decrease", "A 的禁止减出力遥信"),
     _target("decrease-blocked", "遥调 80 kW，验证 B 接手全部减量", 80, 50, 30),
     _target("increase-allowed", "在减闭锁仍有效时遥调 120 kW，验证 A 可以上调", 120, 60, 60),
     _target("decrease-before-release", "遥调 100 kW，保持 A 减闭锁", 100, 60, 40),
     _release("decrease", "A 的禁止减出力遥信", 50),
 )
+CHECKS_INCREASE_ONLY = (
+    *CHECK_INCREASE,
+    Step("agc.external.set-unbound-decrease", "保持增闭锁，置位未绑定的禁止下调遥信",
+         "RTU 采集两路遥信均为真，只有增闭锁已绑定",
+         lambda context: set_external_direction(context, "decrease", True)),
+    _target("unbound-decrease-allowed", "遥调 60 kW，验证未绑定的遥信置位时 A 仍可下调", 60, 30, 30),
+    *CHECK_INCREASE_RELEASE,
+)
 CAPTURE = Step("agc.external.capture", "保存 IEC104 主站报文", "已留存遥调和协议确认")
 
 
-@case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *PREPARE,
-           MASTER104_START, CONNECT, *CHECKS, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
-           MASTER104_FINISH, DESKTOP_FINISH)
+def _external_block_plan(prepare, checks):
+    return case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *prepare,
+                     MASTER104_START, CONNECT, *checks, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
+                     MASTER104_FINISH, DESKTOP_FINISH)
+
+
+@_external_block_plan(PREPARE, CHECKS)
 @execution_logic("""
 1. 使用 slaveSim 和 DSP 上位机建立两个可控成员，A 映射两路可选闭锁遥信，B 无闭锁绑定。两个成员范围均为 10～100 kW。
 2. 通过 IEC104 遥调建立 40/40 kW 基线。置位 A 的外部增闭锁，B 再分配上调目标，A 仍能下调；解除后不重送总目标，恢复等权分配。
@@ -170,6 +199,23 @@ CAPTURE = Step("agc.external.capture", "保存 IEC104 主站报文", "已留存�
 """)
 def test_agc_optional_external_direction_block_redistributes_members(request):
     """AGC 外部成员增减闭锁与剩余分配"""
+    _run_external_block(request, PREPARE, CHECKS)
+
+
+@_external_block_plan(PREPARE_INCREASE_ONLY, CHECKS_INCREASE_ONLY)
+@execution_logic("""
+1. 建立两台等权 AGC 成员。A 只绑定禁止上调遥信，禁止下调留空，B 两路都留空。保存并逐项读回。
+2. 先建立 40/40 kW 基线；置位 A 的禁止上调并遥调 120 kW，核对 A 保持 40 kW、B 承担 80 kW。
+3. 保持增闭锁并置位未绑定的禁止下调遥信，确认 RTU 实收两路为真。下调目标至 60 kW，两台应各收到 30 kW。
+4. 再遥调 100 kW，A 保持 30 kW、B 承担 70 kW。仅解除增闭锁，维持原总目标，核对自动恢复各 50 kW。
+5. 核对实际 RTU 写请求、应答和寄存器。保存 IEC104 报文及失败现场，再清理本例资源。
+""")
+def test_agc_only_bound_increase_block_restricts_member(request):
+    """AGC 只绑定外部增闭锁后下调仍可用"""
+    _run_external_block(request, PREPARE_INCREASE_ONLY, CHECKS_INCREASE_ONLY)
+
+
+def _run_external_block(request, prepare, checks):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -189,9 +235,9 @@ def test_agc_optional_external_direction_block_redistributes_members(request):
         context.simulator = simulator
         failure = None
         try:
-            run_steps(request, PREPARE, context)
+            run_steps(request, prepare, context)
             context.master = request.getfixturevalue("master104")
-            run_steps(request, (CONNECT, *CHECKS), context)
+            run_steps(request, (CONNECT, *checks), context)
             with track_fixture_step(request, CAPTURE):
                 _save_frames(context.master)
         except BaseException as error:
