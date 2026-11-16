@@ -4,7 +4,7 @@ from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.common.by import By
 
 from .agc_direction_page import AgcDirectionPage, parse_decimal, unique_match
-from .control_group_page import AGC_MEMBER_NAMES, AVC_CREATE_NOTICE, AVC_MEMBER_NAMES, GROUP_LIST
+from .control_group_page import AGC_MEMBER_NAMES, AVC_MEMBER_NAMES, GROUP_LIST
 from .modbus_rtu_page import xpath_text
 
 
@@ -78,8 +78,6 @@ class PowerRangePage(AgcDirectionPage):
         self.member_name = connection
         self.draft_opened = True
         self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例控制组")
-        if not self.active:
-            self._click(self._button("我已了解，继续新增", AVC_CREATE_NOTICE), "确认新增 AVC 控制组")
         self._field_value(GROUP, "group_name", self.group_name)
         if self.active:
             self._open_agc_members()
@@ -263,8 +261,5 @@ class PowerRangePage(AgcDirectionPage):
             self._close_control_draft(MEMBER, "取消编辑", "放弃未完成的成员编辑？", "放弃草稿")
             self._close_control_draft(GROUP, "取消", "放弃未保存的控制组草稿？", "放弃草稿")
         else:
-            if self._visible((By.XPATH, AVC_CREATE_NOTICE)):
-                self._click(self._button("取消", AVC_CREATE_NOTICE), "关闭本例 AVC 新增确认窗口")
-                self._until(lambda _: not self._visible((By.XPATH, AVC_CREATE_NOTICE)), "AVC 新增确认窗口未关闭")
             self._close_control_draft(MEMBER, "取消编辑", "放弃未暂存的成员改动？", "放弃改动")
             self._close_control_draft(GROUP, "取消", "放弃未保存的控制组改动？", "放弃改动")

@@ -5,7 +5,7 @@ import time
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
-from .control_group_page import AVC_CREATE_NOTICE, AVC_MEMBER_NAMES, GROUP_LIST, ROUTE_ALERT, ControlGroupPage
+from .control_group_page import AVC_MEMBER_NAMES, GROUP_LIST, ROUTE_ALERT, ControlGroupPage
 from .modbus_rtu_page import xpath_text
 
 
@@ -149,7 +149,6 @@ class AvcPeriodPage(ControlGroupPage):
             raise AssertionError(f"现场已存在同名 AVC 控制组：{group_name}")
         self.group_draft_opened = True
         self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例 AVC 控制组")
-        self._click(self._button("我已了解，继续新增", AVC_CREATE_NOTICE), "确认新增 AVC 控制组")
         self._fill_field(GROUP, "group_name", group_name)
         self._choose(GROUP, "id", "command_mode", MODE_LABELS[mode])
         self._choose(GROUP, "id", "control_mode", "周期直分配")
@@ -280,9 +279,6 @@ class AvcPeriodPage(ControlGroupPage):
             with self.desktop.step(f"清理本例 AVC 控制组 {self.group_name}", cancellable=False):
                 if self.group_draft_opened:
                     self._wait_group_save_idle(GROUP)
-                    if self._visible((By.XPATH, AVC_CREATE_NOTICE)):
-                        self._click(self._button("取消", AVC_CREATE_NOTICE), "关闭本例 AVC 新增确认窗口")
-                        self._wait_draft_closed(AVC_CREATE_NOTICE, "AVC 新增确认窗口未关闭")
                     self._discard_draft(MEMBER, "取消编辑")
                     self._discard_draft(GROUP, "取消")
                     self.group_draft_opened = False

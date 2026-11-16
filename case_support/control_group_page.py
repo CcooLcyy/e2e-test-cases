@@ -14,7 +14,6 @@ GROUP_LIST = ("//div[contains(concat(' ',normalize-space(@class),' '),' control-
               "/div[contains(concat(' ',normalize-space(@class),' '),' ant-card ')]"
               "[./div[contains(concat(' ',normalize-space(@class),' '),' ant-card-head ')]"
               "//*[contains(concat(' ',normalize-space(@class),' '),' ant-card-head-title ') and normalize-space(.)='控制组列表']]")
-AVC_CREATE_NOTICE = ModbusRtuPage.DIALOG_XPATH + "[.//*[normalize-space(text())='新增 AVC 控制组前请确认']]"
 ROUTE_ALERT = ("//*[contains(concat(' ',normalize-space(@class),' '),' ant-alert ')]"
                "[.//*[normalize-space(text())='控制组配置已保存，映射尚未同步完成']]")
 AGC_MEMBER_NAMES = '.agc-runtime-members tbody > tr[data-row-key] strong'
