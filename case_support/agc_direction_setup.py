@@ -149,11 +149,11 @@ class AgcDirectionSetup(AgcDirectionPage):
 
         with self.desktop.step("新增本例 AGC 控制组和单成员", expected={"组": group_name, "成员": member_name,
                                "RTU连接": rtu_connection, "测量来源": measurement, "设定目标": setpoint,
-                               "模式": "周期直分配，绝对值", "范围kW": "10～100"}):
+                               "模式": "周期分配，绝对值", "范围kW": "10～100"}):
             self._draft_opened = True
             self._click(self._button("+ 新增控制组", self.LIST), "新增专用 AGC 控制组")
             self._fill_group_field(self.GROUP_DIALOG, "group_name", group_name)
-            self._choose(self.GROUP_DIALOG, "control_mode", "周期直分配")
+            self._choose(self.GROUP_DIALOG, "control_mode", "周期分配")
             self._choose(self.GROUP_DIALOG, "p_cmd_mode", "绝对值")
             self._members_tab()
             self._click((By.XPATH, self.GROUP_DIALOG + "//button[@aria-label='添加成员']"), "添加可控 AGC 成员")
@@ -170,7 +170,7 @@ class AgcDirectionSetup(AgcDirectionPage):
         with self.desktop.step("读取已保存的 AGC 配置和实际点位"):
             overview = self._select_owned_group()
             context = overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text
-            if "周期直分配" not in context or "绝对值" not in context:
+            if "周期分配" not in context or "绝对值" not in context:
                 raise AssertionError(f"AGC 控制方式或总控指令模式与本例不符：{context}")
             route_error = self._visible((By.XPATH, ROUTE_ALERT))
             if route_error:

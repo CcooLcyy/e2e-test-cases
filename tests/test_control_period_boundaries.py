@@ -243,9 +243,9 @@ LOGIN = (Step("period.account", "读取测试账号", "专用账号配置有效"
 PREPARE = (
     Step("period.sim", "重建本例 RTU 模拟总线", "实际串口、站号和各初始寄存器读回一致", _prepare_simulator),
     Step("period.rtu", "配置、启动并核对 RTU 量测和写入点", "已收到初始量测，设定点已保存", _prepare_rtu),
-    Step("period.agc", "建立 AGC 控制组", "周期直分配，计算 1 秒、命令间隔 4 秒", _prepare_agc),
+    Step("period.agc", "建立 AGC 控制组", "周期分配，计算 1 秒、命令间隔 4 秒", _prepare_agc),
 )
-PREPARE_AVC = Step("period.avc", "建立 AVC 定压控制组", "计算 15 秒、命令间隔 30 秒", _prepare_avc)
+PREPARE_AVC = Step("period.avc", "建立 AVC 定压控制组", "周期分配，计算 15 秒、命令间隔 30 秒", _prepare_avc)
 PREPARE_104 = Step("period.104", "建立本例 IEC104 点表和路由", "保存、读回本例点号并启动被控站", _prepare_iec104)
 CONNECT = Step("period.connect", "连接专用 IEC104 主站并启动本例控制组", "主站与本例控制组已运行", _connect)
 FIRST_AGC = Step("period.agc.first", "遥调总有功 40 kW", "AGC 成员收到 40 kW 写入并应答", _first_agc)

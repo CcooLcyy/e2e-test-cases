@@ -100,14 +100,14 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             raise RuntimeError(f"AGC 已存在同名控制组：{group_name}")
 
         with self.desktop.step("新增本例 AGC 控制组和成员", expected={
-            "组": group_name, "成员与 RTU 连接": self.members, "模式": f"周期直分配 · {allocation} · 绝对值",
+            "组": group_name, "成员与 RTU 连接": self.members, "模式": f"周期分配 · {allocation} · 绝对值",
             "成员额定容量及上限 kW": self.member_capacities, "成员下限 kW": self.minimum_kw,
             "通信心跳超时毫秒": self.COMMUNICATION_TIMEOUT_MS,
         }):
             self._draft_opened = True
             self._click(self._button("+ 新增控制组", self.LIST), "新增专用 AGC 控制组")
             self._fill_group_field(self.GROUP_DIALOG, "group_name", group_name)
-            self._choose(self.GROUP_DIALOG, "control_mode", "周期直分配")
+            self._choose(self.GROUP_DIALOG, "control_mode", "周期分配")
             self._choose(self.GROUP_DIALOG, "p_cmd_mode", "绝对值")
             self._choose_allocation(allocation)
             self._members_tab()
@@ -118,7 +118,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         with self.desktop.step("读取已保存的 AGC 配置和实际点位"):
             overview = self._select_owned_group()
             self.desktop.check("核对 AGC 控制与分配模式", overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text,
-                               f"周期直分配 · {allocation} · 绝对值")
+                               f"周期分配 · {allocation} · 绝对值")
             route_error = self._visible((By.XPATH, ROUTE_ALERT))
             if route_error:
                 raise AssertionError("AGC 自动路由保存失败：" + route_error.text)

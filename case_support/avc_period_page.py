@@ -161,7 +161,7 @@ class AvcPeriodPage(ControlGroupPage):
         self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例 AVC 控制组")
         self._fill_field(GROUP, "group_name", group_name)
         self._choose(GROUP, "id", "command_mode", MODE_LABELS[mode])
-        self._choose(GROUP, "id", "control_mode", "周期直分配")
+        self._choose(GROUP, "id", "control_mode", "周期分配")
         self._set_period_fields(calculation_period, command_period)
         allocation_label = allocation or ("按可调范围比例" if proportional else None)
         if allocation_label is not None:
@@ -226,7 +226,7 @@ class AvcPeriodPage(ControlGroupPage):
             self._discard_draft(GROUP, "取消")
             self.group_draft_opened = False
         self.desktop.check("核对 AVC 命令模式", self._read_summary("命令模式"), MODE_LABELS[mode])
-        self.desktop.check("核对 AVC 控制方式", self._read_summary("控制方式"), "周期直分配")
+        self.desktop.check("核对 AVC 控制方式", self._read_summary("控制方式"), "周期分配")
         self.desktop.check("核对 AVC 命令点", self._read_summary("命令点"), target_tag)
         self._assert_periods(calculation_period, command_period)
         state = self._until(self._known_state, "新建 AVC 控制组未显示明确状态")
