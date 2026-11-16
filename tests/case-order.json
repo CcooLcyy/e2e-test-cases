@@ -51,7 +51,8 @@
         "tests/test_control_period_boundaries.py::test_agc_running_group_saves_periods_and_restarts",
         "tests/test_control_measurement_quality.py::test_agc_excludes_member_until_first_measurement",
         "tests/test_control_measurement_quality.py::test_agc_excludes_member_with_bad_measurement",
-        "tests/test_control_measurement_quality.py::test_agc_waits_for_measurement_after_rtu_polling_restarts"
+        "tests/test_control_measurement_quality.py::test_agc_waits_for_measurement_after_rtu_polling_restarts",
+        "tests/test_agc_multimember_blocks.py::test_agc_partial_lower_limit_redistributes_without_group_block"
       ]
     },
     {

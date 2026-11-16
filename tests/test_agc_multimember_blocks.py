@@ -125,7 +125,7 @@ PREPARE = (
     Step("agc.multiblock.104", "建立专用 IEC104 遥调与增减闭锁遥信", "读回点号及路由，链路已启动", _prepare_104),
 )
 CONNECT = Step("agc.multiblock.connect", "连接主站并启动本例 AGC 控制组", "主站连接且两台成员均通信正常", _connect)
-PHASES = (
+UPPER_REDISTRIBUTION = (
     _phase("initial", "遥调 56 kW 建立两台均未到限的基线", 56, 16, 40),
     _phase("partial", "遥调 86 kW，检查单台到限和剩余目标分配", 86, 20, 66),
     _phase("upper", "遥调 120 kW，检查两台均到上限", 120, 20, 100, increase=True),
@@ -133,12 +133,25 @@ PHASES = (
     _phase("lower", "遥调 20 kW，检查两台均到下限", 20, 10, 10, decrease=True),
     _phase("up", "反向遥调 56 kW，检查减闭锁解除", 56, 16, 40),
 )
+LOWER_REDISTRIBUTION = (
+    _phase("lower-initial", "遥调 120 kW，建立从 20/100 kW 下调的基线", 120, 20, 100, increase=True),
+    _phase("lower-partial", "遥调 48 kW，检查 A 先到下限且 B 接手剩余减量", 48, 10, 38),
+    _phase("lower-continue", "继续下调至 42 kW，检查 A 保持下限且 B 继续下调", 42, 10, 32),
+    _phase("lower-all", "遥调 20 kW，检查全组到下限后才置减闭锁", 20, 10, 10, decrease=True),
+    _phase("lower-reverse", "反向遥调 56 kW，检查减闭锁解除", 56, 16, 40),
+)
 CAPTURE = Step("agc.multiblock.capture", "保存模拟主站原始报文", "保留本例 IEC104 收发报文")
 
 
-@case_plan(ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *PREPARE,
-           MASTER104_START, CONNECT, *PHASES, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
-           MASTER104_FINISH, DESKTOP_FINISH)
+def _multiblock_plan(phases):
+    return case_plan(
+        ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *PREPARE,
+        MASTER104_START, CONNECT, *phases, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP, SIM_FINISH,
+        MASTER104_FINISH, DESKTOP_FINISH,
+    )
+
+
+@_multiblock_plan(UPPER_REDISTRIBUTION)
 @execution_logic("""
 1. 独立建立两台模拟 RTU、AGC 控制组和专用 IEC104 路由，成员范围为 10～20 和 10～100 kW。
 2. 设为按额定容量比例分配。遥调 56 kW，核对 16/40 kW 及两方向均未闭锁。
@@ -148,6 +161,24 @@ CAPTURE = Step("agc.multiblock.capture", "保存模拟主站原始报文", "保�
 """)
 def test_agc_partial_saturation_redistributes_without_group_block(request):
     """AGC 部分成员到限重分配和全组增减闭锁"""
+    _run_multiblock(request, UPPER_REDISTRIBUTION)
+
+
+@_multiblock_plan(LOWER_REDISTRIBUTION)
+@execution_logic("""
+1. 独立建立两台模拟 RTU、按额定容量分配的 AGC 组及专用 IEC104 路由。A 调节范围为 10～20 kW，B 为 10～100 kW。
+2. 遥调 120 kW，核对 A/B 实收 20/100 kW。下调至 48 kW，按容量 1:5 原分减量 12/60 kW；
+   A 最多只能减 10 kW，余下 2 kW 由 B 接手，所以两台实收 10/38 kW，组减闭锁仍为否。
+3. 再下调至 42 kW，A 保持 10 kW，B 实收 32 kW，组减闭锁仍为否。
+4. 下调至 20 kW，确认两台均到 10 kW 后组减闭锁置位；反向遥调 56 kW 后解除。
+5. 每轮核对实际 RTU 写请求、应答及寄存器，核对 IEC104 闭锁遥信及品质。失败时先取证，再清理本例资源。
+""")
+def test_agc_partial_lower_limit_redistributes_without_group_block(request):
+    """AGC 单成员先到下限后由剩余成员承担减量"""
+    _run_multiblock(request, LOWER_REDISTRIBUTION)
+
+
+def _run_multiblock(request, phases):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -169,7 +200,7 @@ def test_agc_partial_saturation_redistributes_without_group_block(request):
         try:
             run_steps(request, PREPARE, context)
             context.master = request.getfixturevalue("master104")
-            run_steps(request, (CONNECT, *PHASES), context)
+            run_steps(request, (CONNECT, *phases), context)
             with track_fixture_step(request, CAPTURE):
                 _save_frames(context.master)
         except BaseException as error:
