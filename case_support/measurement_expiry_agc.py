@@ -77,7 +77,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
     def _expected_members(self):
         return self.members
 
-    def create_communication_group(self, group_name, members, *, configure_expiry=None, capacities=None):
+    def create_communication_group(self, group_name, members, *, configure_expiry=None, capacities=None, allocation=None):
         """为每个成员绑定独立的 RTU 连接，读回映射和总控输入 Tag。"""
         if self._draft_opened or self._save_requested or self.group is not None:
             raise RuntimeError("本例 AGC 控制组已开始创建")
@@ -87,12 +87,13 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         self.members = dict(members)
         if capacities is None:
             self.member_capacities = dict.fromkeys(self.members, self.capacity_kw)
-            allocation = self.EQUAL_ALLOCATION
+            default_allocation = self.EQUAL_ALLOCATION
         else:
             if capacities.keys() != self.members.keys():
                 raise ValueError("必须为每个 AGC 成员提供额定容量")
             self.member_capacities = dict(capacities)
-            allocation = self.CAPACITY_ALLOCATION
+            default_allocation = self.CAPACITY_ALLOCATION
+        allocation = allocation or default_allocation
         self._control_view("控制策略")
         self._refresh_control_groups("AGC")
         if self._group_item(group_name):
@@ -122,17 +123,17 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             if route_error:
                 raise AssertionError("AGC 自动路由保存失败：" + route_error.text)
             self.group.update(self._read_point_specs())
-            self._verify_members(configure_expiry, proportional=capacities is not None)
+            self._verify_members(configure_expiry, allocation=allocation)
         return dict(self.group)
 
-    def _verify_members(self, configure_expiry, *, proportional):
+    def _verify_members(self, configure_expiry, *, allocation):
         self._click(self._button("编辑", self.OVERVIEW), "重新打开 AGC 控制组读取已保存映射")
         self._draft_opened = True
         self._members_tab()
         cards = self.driver.find_elements(By.XPATH, self.GROUP_DIALOG + self.MEMBER_CARD)
         self.desktop.check("核对本例 AGC 成员", sorted(card.get_attribute("aria-label") for card in cards),
                            sorted(f"成员 {name}" for name in self.members))
-        weights = self.member_capacities if proportional else dict.fromkeys(self.members, 1)
+        weights = self.member_capacities if allocation == self.CAPACITY_ALLOCATION else dict.fromkeys(self.members, 1)
         for name, connection_name in self.members.items():
             capacity = f"{self.member_capacities[name]:.2f}"
             share = f"{Decimal(100) * weights[name] / sum(weights.values()):.1f}%"
@@ -141,9 +142,15 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             card = self._visible((By.XPATH, self.GROUP_DIALOG + self.MEMBER_CARD + "[@aria-label=" + xpath_text(f"成员 {name}") + "]"))
             self.desktop.check(f"核对成员 {name} 可控状态", card.find_element(By.CSS_SELECTOR, ".ant-tag").text, "可控")
             summary = [node.text for node in card.find_elements(By.CSS_SELECTOR, ".agc-group-member__summary > span")]
-            self.desktop.check(f"核对成员 {name} 容量、范围和分配比例", summary,
-                               [f"额定容量 {capacity} kW", f"调节范围 {self.minimum_kw:.2f}～{capacity} kW",
-                                f"理论占比 {share}"])
+            expected = [f"额定容量 {capacity} kW", f"调节范围 {self.minimum_kw:.2f}～{capacity} kW"]
+            description = "容量、范围和分配比例"
+            if allocation in (self.EQUAL_ALLOCATION, self.CAPACITY_ALLOCATION):
+                expected.append(f"理论占比 {share}")
+            else:
+                # 实时裕量的占比随量测和参与状态变化，配置回读只核对固定边界。
+                summary = [text for text in summary if text.startswith(("额定容量", "调节范围"))]
+                description = "容量和范围"
+            self.desktop.check(f"核对成员 {name} {description}", summary, expected)
             for _, label, tag in self.MEMBER_POINTS:
                 binding = unique_match(card.find_elements(By.XPATH, ".//div[contains(concat(' ',normalize-space(@class),' '),"
                                        "' agc-group-member__point ')][./span[normalize-space(.)=" + xpath_text(label) + "]]/div/div"), label)

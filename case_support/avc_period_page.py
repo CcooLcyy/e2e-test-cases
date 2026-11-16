@@ -149,7 +149,7 @@ class AvcPeriodPage(ControlGroupPage):
                      target_tag, rtu_connection, q_measurement_tag, q_setpoint_tag, kp=2,
                      member_name="inverter", q_min=0, q_max=100, rtu_target_tag=None,
                      voltage_connection=None, configure_expiry=None, additional_members=(),
-                     proportional=False):
+                     proportional=False, allocation=None):
         self._open_groups()
         self._refresh_control_groups("AVC")
         self.group_name, self.member_name = group_name, member_name
@@ -163,12 +163,13 @@ class AvcPeriodPage(ControlGroupPage):
         self._choose(GROUP, "id", "command_mode", MODE_LABELS[mode])
         self._choose(GROUP, "id", "control_mode", "周期直分配")
         self._set_period_fields(calculation_period, command_period)
-        if proportional:
-            allocation = (By.XPATH, GROUP + "//label[normalize-space(.)='分配方式']"
-                          "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-form-item ')][1]"
-                          "//input[@role='combobox']")
-            field = self._until(lambda _: self._visible(allocation), "AVC 分配方式未显示")
-            self._choose(GROUP, "id", field.get_attribute("id"), "按可调范围比例")
+        allocation_label = allocation or ("按可调范围比例" if proportional else None)
+        if allocation_label is not None:
+            selector = (By.XPATH, GROUP + "//label[normalize-space(.)='分配方式']"
+                        "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-form-item ')][1]"
+                        "//input[@role='combobox']")
+            field = self._until(lambda _: self._visible(selector), "AVC 分配方式未显示")
+            self._choose(GROUP, "id", field.get_attribute("id"), allocation_label)
         self._open_advanced_signals()
         self._fill_field(GROUP, "voltage_meas_tag", voltage_tag)
         self._fill_field(GROUP, "voltage_meas_unit", "V")
