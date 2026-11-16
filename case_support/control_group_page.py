@@ -22,6 +22,12 @@ AVC_MEMBER_NAMES = ("//div[contains(@class,'protocol-point-card')][./div[contain
 
 
 class ControlGroupPage(ModbusRtuPage):
+    def _open_group_members(self, dialog, module):
+        tab = dialog + "//*[@role='tab'][starts-with(normalize-space(.),'成员设备')]"
+        self._click((By.XPATH, tab), f"打开 {module} 成员设备页签")
+        self._until(lambda _: self._visible((By.XPATH, tab + "[@aria-selected='true']")),
+                    f"{module} 成员设备页签未选中")
+
     @contextmanager
     def _finish_group_save(self):
         """Check stop before submitting, then keep the save and its readback together."""

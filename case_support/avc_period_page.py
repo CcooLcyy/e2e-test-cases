@@ -127,6 +127,16 @@ class AvcPeriodPage(ControlGroupPage):
         with self.desktop.step("核对 AVC 已保存的控制周期", expected=expected):
             self._until(lambda _: self._read_summary("控制周期") == expected, f"AVC 未显示已保存的控制周期：{expected}")
 
+    def _open_advanced_signals(self):
+        header = (GROUP + "//*[normalize-space(.)='高级：内部点名与工程量换算']"
+                  "/ancestor-or-self::*[@aria-expanded][1]")
+        locator = (By.XPATH, header)
+        control = self._until(lambda _: self._visible(locator), "AVC 高级点名配置未显示")
+        if control.get_attribute("aria-expanded") != "true":
+            self._click(locator, "展开 AVC 内部点名与工程量换算")
+            self._until(lambda _: self._visible((By.XPATH, header + "[@aria-expanded='true']")),
+                        "AVC 高级点名配置未展开")
+
     def _wait_draft_closed(self, root, message):
         self._until(lambda _: not self._visible((By.XPATH, root)), message)
 
@@ -159,6 +169,7 @@ class AvcPeriodPage(ControlGroupPage):
                           "//input[@role='combobox']")
             field = self._until(lambda _: self._visible(allocation), "AVC 分配方式未显示")
             self._choose(GROUP, "id", field.get_attribute("id"), "按可调范围比例")
+        self._open_advanced_signals()
         self._fill_field(GROUP, "voltage_meas_tag", voltage_tag)
         self._fill_field(GROUP, "voltage_meas_unit", "V")
         if mode == "voltage":
@@ -177,6 +188,7 @@ class AvcPeriodPage(ControlGroupPage):
         if rtu_target_tag is not None:
             self._choose(GROUP, "aria-label", "总无功命令数据来源", f"ModbusRTU / {rtu_connection} / {rtu_target_tag}",
                          search=rtu_target_tag, multiple=True)
+        self._open_group_members(GROUP, "AVC")
         for name, connection, measurement, setpoint, lower, upper in members:
             self._click((By.XPATH, GROUP + '//button[@aria-label="添加成员"]'), f"新增本例 AVC 成员 {name}")
             self._fill_field(MEMBER, "member_name", name)

@@ -67,10 +67,6 @@ class PowerRangePage(AgcDirectionPage):
         self._choose(MEMBER, "aria-label", label + "连接", source, search=connection)
         self._choose(MEMBER, "aria-label", label, f"{source} / {tag}", search=tag)
 
-    def _open_agc_members(self):
-        self._click((By.XPATH, GROUP + "//*[@role='tab'][starts-with(normalize-space(.),'成员设备')]"),
-                    "打开 AGC 成员配置")
-
     def create_group(self, connection, lower, upper):
         self.open_groups()
         self._refresh_control_groups(self.module)
@@ -79,10 +75,9 @@ class PowerRangePage(AgcDirectionPage):
         self.draft_opened = True
         self._click(self._button("+ 新增控制组", GROUP_LIST), "新增本例控制组")
         self._field_value(GROUP, "group_name", self.group_name)
-        if self.active:
-            self._open_agc_members()
-        else:
+        if not self.active:
             self._choose(GROUP, "id", "command_mode", "总无功模式")
+        self._open_group_members(GROUP, self.module)
         self._click((By.XPATH, GROUP + '//button[@aria-label="添加成员"]'), "新增本例成员")
         self._field_value(MEMBER, "member_name", connection)
         if self.active:
@@ -145,9 +140,8 @@ class PowerRangePage(AgcDirectionPage):
         root = self.runtime if self.active else AVC_SUMMARY
         self.draft_opened = True
         self._click(self._button("编辑", root), "编辑本例控制组")
-        if self.active:
-            self._open_agc_members()
-        action = f"编辑成员 {self.member_name}" if self.active else f"编辑 {self.member_name}"
+        self._open_group_members(GROUP, self.module)
+        action = f"编辑成员 {self.member_name}"
         self._click((By.XPATH, GROUP + "//button[@aria-label=" + xpath_text(action) + "]"), "编辑本例成员")
         self._field_value(MEMBER, "max_kw_decimal" if self.active else "q_max_kvar", upper)
         self._click(self._button("确认成员", MEMBER), "确认新的成员上限")
