@@ -52,7 +52,7 @@ def _configure_expiry(page, dialog, *, verify=False):
     assert field.get_property("value") == expected, f"量测有效期应为 {expected}，实际为 {field.get_property('value')}"
 
 
-def prepare_control_rtu(context, specs, *, deferred=(), slow_intervals=None):
+def prepare_control_rtu(context, specs, *, deferred=(), slow_intervals=None, configure_extra_points=None):
     """读回模拟器资源并建立对应 RTU 连接，可推迟指定连接启动轮询。"""
     context.rtu.open_current_links()
     context.sim_started = True
@@ -65,8 +65,10 @@ def prepare_control_rtu(context, specs, *, deferred=(), slow_intervals=None):
         context.rtu.create_connection(name, point["actual_device"], 9600, 8, 1, "N", point["station_id"],
                                       intervals.get(role, 1000))
         context.rtu.add_point("measured", address=point["address"])
-        if len(points) == 2:
+        if len(points) >= 2:
             context.rtu.add_point("setpoint", function=6, address=points[1]["address"])
+        if configure_extra_points is not None:
+            configure_extra_points(role, points[2:])
         context.rtu.assert_saved_configuration()
         context.connections[role] = name
         if role not in deferred:

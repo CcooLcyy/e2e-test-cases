@@ -52,7 +52,8 @@
         "tests/test_control_measurement_quality.py::test_agc_excludes_member_until_first_measurement",
         "tests/test_control_measurement_quality.py::test_agc_excludes_member_with_bad_measurement",
         "tests/test_control_measurement_quality.py::test_agc_waits_for_measurement_after_rtu_polling_restarts",
-        "tests/test_agc_multimember_blocks.py::test_agc_partial_lower_limit_redistributes_without_group_block"
+        "tests/test_agc_multimember_blocks.py::test_agc_partial_lower_limit_redistributes_without_group_block",
+        "tests/test_agc_external_direction_block.py::test_agc_optional_external_direction_block_redistributes_members"
       ]
     },
     {
@@ -67,7 +68,9 @@
         "tests/test_avc_multimember_allocation.py::test_avc_redistributes_at_limit_as_passive_output_changes",
         "tests/test_control_period_boundaries.py::test_agc_avc_run_with_independent_periods_and_avc_upper_boundaries",
         "tests/test_control_measurement_quality.py::test_avc_rejects_voltage_target_until_first_measurement",
-        "tests/test_control_measurement_quality.py::test_avc_suspends_voltage_control_with_bad_measurement"
+        "tests/test_control_measurement_quality.py::test_avc_suspends_voltage_control_with_bad_measurement",
+        "tests/test_avc_direction_blocks.py::test_avc_reports_direction_blocks_when_all_members_reach_limits",
+        "tests/test_avc_external_direction_block.py::test_avc_external_member_direction_block_redistributes_and_recovers"
       ]
     }
   ]
