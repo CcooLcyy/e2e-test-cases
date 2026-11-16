@@ -114,6 +114,34 @@ def _phase(identifier, action, target, a, b, *, increase=False, decrease=False):
     return Step(f"agc.multiblock.{identifier}", action, feedback, run)
 
 
+def _measurement_baseline(identifier, a, b):
+    expected = {"A": a, "B": b}
+    values = {name: f"{value:.2f} kW" for name, value in expected.items()}
+
+    def run(context):
+        for name, value in expected.items():
+            point = context.points[name][0]
+            actual = context.simulator.set_value(
+                point["bus"], point["station_id"], point["function"], point["address"], value,
+            )
+            assert (actual["actual_device"], actual["link_path"]) == (point["actual_device"], point["link_path"]), (
+                f"成员 {name} 的模拟串口身份变化：{actual!r}")
+
+        observed = {}
+
+        def ready(_):
+            for name in values:
+                observed[name] = context.group.read_member_measurement(name)
+            return all(point["value"] == values[name] and point["status"] == "新鲜 · 有效"
+                       for name, point in observed.items())
+
+        with context.desktop.step("确认上位机读到两台成员的实测基线", expected=values, actual=observed):
+            context.group._until(ready, f"AGC 未读到预期的有效实测基线：{values}", timeout=context.timeout)
+
+    return Step(f"agc.multiblock.{identifier}", f"设置并确认 A/B 实测基线 {a}/{b} kW",
+                f"slaveSim 读回 {a}/{b} kW，AGC 两台成员实测均新鲜有效", run)
+
+
 ENVIRONMENT = Step("agc.multiblock.environment", "检查 slaveSim 和模拟 104 主站入口", "测试入口及驱动有效")
 SIM_START = Step("agc.multiblock.sim.start", "打开本例 slaveSim", "能读取配置与运行报文")
 SIM_FINISH = Step("agc.multiblock.sim.finish", "关闭本例 slaveSim", "独立浏览器会话已关闭")
@@ -141,10 +169,14 @@ UPPER_REDISTRIBUTION = (
     _phase("up", "反向遥调 56 kW，检查减闭锁解除", 56, 16, 40),
 )
 LOWER_REDISTRIBUTION = (
-    _phase("lower-initial", "遥调 120 kW，建立从 20/100 kW 下调的基线", 120, 20, 100, increase=True),
+    _phase("lower-initial", "遥调 120 kW，核对 A/B 设定为 20/100 kW", 120, 20, 100, increase=True),
+    _measurement_baseline("lower-baseline-initial", 20, 100),
     _phase("lower-partial", "遥调 48 kW，检查 A 先到下限且 B 接手剩余减量", 48, 10, 38),
+    _measurement_baseline("lower-baseline-partial", 10, 38),
     _phase("lower-continue", "继续下调至 42 kW，检查 A 保持下限且 B 继续下调", 42, 10, 32),
+    _measurement_baseline("lower-baseline-continue", 10, 32),
     _phase("lower-all", "遥调 20 kW，检查全组到下限后才置减闭锁", 20, 10, 10, decrease=True),
+    _measurement_baseline("lower-baseline-all", 10, 10),
     _phase("lower-reverse", "反向遥调 56 kW，检查减闭锁解除", 56, 16, 40),
 )
 CAPTURE = Step("agc.multiblock.capture", "保存模拟主站原始报文", "保留本例 IEC104 收发报文")
@@ -180,10 +212,12 @@ def test_agc_partial_saturation_redistributes_without_group_block(request):
 @_multiblock_plan(LOWER_REDISTRIBUTION)
 @execution_logic("""
 1. 独立建立两台模拟 RTU、按额定容量分配的 AGC 组及专用 IEC104 路由。A 调节范围为 10～20 kW，B 为 10～100 kW。
-2. 遥调 120 kW，核对 A/B 实收 20/100 kW。下调至 48 kW，按容量 1:5 原分减量 12/60 kW；
+2. 遥调 120 kW，核对 A/B 实收 20/100 kW，并回填到两台模拟设备的实测寄存器。待 AGC 读到有效的 20/100 kW 后，
+   下调至 48 kW，按容量 1:5 原分减量 12/60 kW；
    A 最多只能减 10 kW，余下 2 kW 由 B 接手，所以两台实收 10/38 kW，组减闭锁仍为否。
-3. 再下调至 42 kW，A 保持 10 kW，B 实收 32 kW，组减闭锁仍为否。
-4. 下调至 20 kW，确认两台均到 10 kW 后组减闭锁置位；反向遥调 56 kW 后解除。
+3. 回填并确认实测 10/38 kW 后，再下调至 42 kW。A 保持 10 kW，B 实收 32 kW，组减闭锁仍为否。
+4. 回填并确认实测 10/32 kW 后，下调至 20 kW，核对两台均收到 10 kW 且组减闭锁置位。
+   回填并确认实测 10/10 kW 后，反向遥调 56 kW，核对减闭锁解除。
 5. 每轮核对实际 RTU 写请求、应答及寄存器，核对 IEC104 闭锁遥信及品质。失败时先取证，再清理本例资源。
 """)
 def test_agc_partial_lower_limit_redistributes_without_group_block(request):
