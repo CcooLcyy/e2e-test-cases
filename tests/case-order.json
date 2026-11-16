@@ -84,6 +84,12 @@
         "tests/test_control_realtime_headroom.py::test_avc_distributes_by_realtime_headroom_after_member_loss",
         "tests/test_control_period_validation.py::test_avc_rejects_out_of_range_control_periods"
       ]
+    },
+    {
+      "name": "IEC104",
+      "cases": [
+        "tests/test_iec104_simulation_raw_value.py::test_iec104_simulation_uploads_entered_values_without_scaling"
+      ]
     }
   ]
 }
