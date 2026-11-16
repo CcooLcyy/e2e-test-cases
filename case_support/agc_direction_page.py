@@ -111,6 +111,8 @@ def _direction_point_acceptable(point):
 class AgcDirectionPage(ControlGroupPage):
     """只读已有专用组，接管身份后不创建、修改或删除被测配置。"""
 
+    command_mode = "绝对值"
+
     def __init__(self, desktop):
         super().__init__(desktop)
         self.group_name = None
@@ -166,8 +168,8 @@ class AgcDirectionPage(ControlGroupPage):
             text = overview.find_element(By.CSS_SELECTOR, ".agc-runtime-heading").text
             if not all(label in text for label in ("运行中", "功能投入", "远方")):
                 raise AssertionError("AGC 验收要求控制组运行、功能投入并允许远方")
-            if "绝对值" not in overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text:
-                raise AssertionError("AGC 验收要求总有功命令为绝对值模式")
+            if self.command_mode not in overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text:
+                raise AssertionError(f"AGC 验收要求总有功命令为{self.command_mode}模式")
             self.group_name, self.conn_id = group_name, conn_id
             self.desktop.metadata["AGC专用控制组"] = dict(group_name=group_name, conn_id=conn_id)
 

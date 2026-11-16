@@ -1,4 +1,4 @@
-"""通过 IEC104 遥调、计算遥测和 RTU 写入验证控制周期。"""
+"""通过 IEC104 遥调、计算遥测和 RTU 写入验证周期控制。"""
 
 from datetime import datetime
 from decimal import Decimal
@@ -14,7 +14,8 @@ from case_support.avc_period_iec104 import send_burst, snapshot, wait_calculatio
 from case_support.avc_period_page import AvcPeriodPage
 from case_support.case_metadata import execution_logic
 from case_support.login_plan import login_steps
-from case_support.measurement_expiry_run import SIM_CLEANUP, UPPER_CLEANUP, _await
+from case_support.measurement_expiry_agc import MeasurementExpiryAgc
+from case_support.measurement_expiry_run import SIM_CLEANUP, UPPER_CLEANUP, _await, _protocol
 from case_support.measurement_expiry_simulator import MeasurementExpirySimulator
 from case_support.modbus_rtu_page import ModbusRtuPage
 from case_support.power_range_run import _environment, _load_account
@@ -30,6 +31,7 @@ from testbench.master104_commands import Master104CommandSender
 pytestmark = pytest.mark.requires_modbus
 MEASUREMENT_TAGS = {"agc": "active-power", "avc": "reactive-power", "voltage": "bus-voltage"}
 SETPOINT = "setpoint"
+DELTA_MEMBER = "active-member"
 
 
 def _prepare_simulator(context):
@@ -48,18 +50,26 @@ def _prepare_rtu(context):
         name = f"{context.name}-{role}"
         page.create_connection(name, measurement["actual_device"], 9600, 8, 1, "N",
                                measurement["station_id"], 1000)
-        page.add_point(MEASUREMENT_TAGS[role], address=measurement["address"])
+        tag = "measured" if context.agc_delta and role == "agc" else MEASUREMENT_TAGS[role]
+        page.add_point(tag, address=measurement["address"])
         if len(points) == 2:
             page.add_point(SETPOINT, function=6, address=points[1]["address"])
         page.assert_saved_configuration()
         page.start()
-        page.wait_value(MEASUREMENT_TAGS[role], measurement["value"], 0, context.timeout)
+        page.wait_value(tag, measurement["value"], 0, context.timeout)
         context.connections[role] = name
 
 
 def _prepare_agc(context):
     saved = context.agc.create_group(
         context.name, "active-member", {"name": context.connections["agc"]}, MEASUREMENT_TAGS["agc"], SETPOINT,
+    )
+    context.agc_target_tag = saved["command_tag"]
+
+
+def _prepare_delta_agc(context):
+    saved = context.agc.create_communication_group(
+        context.name, {DELTA_MEMBER: context.connections["agc"]}, current_measurement_delta=True,
     )
     context.agc_target_tag = saved["command_tag"]
 
@@ -132,6 +142,79 @@ def _first_agc(context, *, seconds=10):
     after = len(context.simulator.events()) - 1
     context.first_agc_input = _send(context, context.agc_ioa, 40)
     context.first_agc = _wait_command(context, "agc", 40, after, seconds=seconds)
+
+
+def _wait_delta_measurement(context, value):
+    observed = {}
+
+    def ready(_):
+        observed["通信"] = context.agc.read_member_communication(DELTA_MEMBER)
+        observed["实测"] = context.agc.read_member_measurement(DELTA_MEMBER)
+        return (observed["通信"]["condition"] == "通信正常" and observed["通信"]["quality"] == "有效"
+                and observed["实测"]["status"] == "新鲜 · 有效"
+                and observed["实测"]["value"] == f"{value:.2f} kW")
+
+    with context.desktop.step("核对差值控制的实测基准", expected=f"成员通信正常，实测 {value} kW 有效", actual=observed):
+        context.agc._until(ready, f"AGC 未观察到通信正常且有效的 {value} kW 实测", timeout=context.timeout)
+
+
+def _delta_register(context, index):
+    point = context.points["agc"][index]
+    return point["bus"], point["station_id"], point["function"], point["address"]
+
+
+def _check_delta_register(context, expected):
+    readback = context.simulator.observe(*_delta_register(context, 1))
+    context.desktop.check("核对 slaveSim 有功设定寄存器", readback["value"], expected)
+
+
+def _send_and_check_delta(context, delta, expected):
+    after = len(context.simulator.events()) - 1
+    _send(context, context.agc_ioa, delta)
+    write = _wait_command(context, "agc", expected, after, seconds=10)
+    _check_delta_register(context, expected)
+    return write
+
+
+def _positive_delta(context):
+    _wait_delta_measurement(context, 40)
+    context.delta_first_write = _send_and_check_delta(context, 20, 60)
+
+
+def _assert_delta_target_kept(context, writes):
+    after = context.delta_first_write["index"]
+    unexpected = [entry for entry in writes["agc"] if entry["index"] > after and entry["value"] != 60]
+    assert not unexpected, f"未收到新遥调时只允许保持 60 kW，实际出现其他 RTU 设定：{unexpected!r}"
+
+
+def _hold_delta_target(context):
+    context.simulator.set_value(*_delta_register(context, 0), 50)
+    _wait_delta_measurement(context, 50)
+    reads, _ = _protocol(context)
+    # 从有效的 50 kW 条件建立后，以同一模拟器的报文时间观察 4 秒下发间隔加 1 秒计算周期。
+    start = next((stamp for _, stamp, value in reversed(reads["agc"]) if value == 50), None)
+    assert start is not None, "slaveSim 报文缺少 50 kW 量测应答，无法建立保持观察窗口"
+
+    def observed(reads, writes):
+        _assert_delta_target_kept(context, writes)
+        _, end, value = reads["agc"][-1]
+        elapsed = (end - start).total_seconds()
+        return elapsed if elapsed >= 5 and value == 50 else False
+
+    actual = {"实测 kW": 50}
+    with context.desktop.step("观察实测变化后的保持窗口", expected="至少 5 秒且没有错误设定写入", actual=actual):
+        elapsed = _await(context, observed, "未观测到跨过下发与计算周期的 50 kW RTU 量测", timeout=max(context.timeout, 10))
+        actual["观察秒数"] = elapsed
+    _check_delta_register(context, 60)
+    _, writes = _protocol(context)
+    _assert_delta_target_kept(context, writes)
+
+
+def _negative_delta(context):
+    _wait_delta_measurement(context, 50)
+    _, writes = _protocol(context)
+    _assert_delta_target_kept(context, writes)
+    _send_and_check_delta(context, -10, 40)
 
 
 def _burst_agc(context):
@@ -269,6 +352,9 @@ PREPARE = (
     Step("period.agc", "建立 AGC 控制组", "周期分配，计算 1 秒、命令间隔 4 秒", _prepare_agc),
 )
 PREPARE_AVC = Step("period.avc", "建立 AVC 定压控制组", "周期分配，计算 15 秒、命令间隔 30 秒", _prepare_avc)
+PREPARE_DELTA_AGC = Step("period.agc.delta-config", "建立按当前实测换算差值指令的 AGC 控制组",
+                         "周期分配；总控输入为增量，单台 RTU 成员绑定通信点并接收绝对设定",
+                         _prepare_delta_agc)
 PREPARE_104 = Step("period.104", "建立本例 IEC104 点表和路由", "保存、读回本例点号并启动被控站", _prepare_iec104)
 CONNECT = Step("period.connect", "连接专用 IEC104 主站并启动本例控制组", "主站与本例控制组已运行", _connect)
 FIRST_AGC = Step("period.agc.first", "遥调总有功 40 kW", "AGC 成员收到 40 kW 写入并应答", _first_agc)
@@ -298,6 +384,14 @@ AGC_UPPER = (
     Step("period.agc.upper-commands", "核对 RTU 首发后的第一条成员命令",
          "实际写入最新目标 70 kW 并应答，与首条命令至少相隔 30 秒", _verify_agc_upper_commands),
 )
+AGC_DELTA = (
+    Step("period.agc.delta-positive", "实测 40 kW 时，IEC104 遥调 +20 kW",
+         "遥调肯定确认并终止，RTU 收到 60 kW 写入并应答，寄存器读回 60 kW", _positive_delta),
+    Step("period.agc.delta-hold", "将实测改为 50 kW，保持不发新命令",
+         "跨过至少一个下发机会，无非 60 kW 的 RTU 写请求，寄存器仍为 60 kW", _hold_delta_target),
+    Step("period.agc.delta-negative", "实测 50 kW 时，IEC104 遥调 −10 kW",
+         "遥调肯定确认并终止，RTU 收到 40 kW 写入并应答，寄存器读回 40 kW", _negative_delta),
+)
 PARALLEL = (
     FIRST_AGC,
     Step("period.avc.first", "遥调定压目标 230 V", "220 V 实测下 AVC 成员收到 20 kvar 并应答", _first_avc),
@@ -311,12 +405,14 @@ PARALLEL = (
 CAPTURE = Step("period.capture", "保存主站协议记录", "本例 IEC104 原始报文已记录")
 
 
-def _prepare_steps(with_avc):
+def _prepare_steps(with_avc, agc_delta):
+    if agc_delta:
+        return (*PREPARE[:2], PREPARE_DELTA_AGC, PREPARE_104)
     return (*PREPARE, PREPARE_AVC, PREPARE_104) if with_avc else (*PREPARE, PREPARE_104)
 
 
-def _plan(*checks, with_avc=False):
-    prepare = _prepare_steps(with_avc)
+def _plan(*checks, with_avc=False, agc_delta=False):
+    prepare = _prepare_steps(with_avc, agc_delta)
     plan = case_plan(
         ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *prepare,
         MASTER104_START, CONNECT, *checks, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP,
@@ -375,7 +471,7 @@ def _cleanup(request, context, failure):
                 failure.add_note(f"模拟总线清理失败：{error}")
 
 
-def _run(request, checks, *, with_avc=False, agc_calculation=False):
+def _run(request, checks, *, with_avc=False, agc_calculation=False, agc_delta=False):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -385,10 +481,11 @@ def _run(request, checks, *, with_avc=False, agc_calculation=False):
     rtu = ModbusRtuPage(desktop)
     context = SimpleNamespace(
         name=name, timeout=timeout, desktop=desktop, page=PlatformLoginPage(desktop), rtu=rtu,
-        agc=AgcDirectionSetup(desktop), avc=AvcPeriodPage(desktop) if with_avc else None,
+        agc=MeasurementExpiryAgc(desktop) if agc_delta else AgcDirectionSetup(desktop),
+        avc=AvcPeriodPage(desktop) if with_avc else None,
         avc_name=f"{name}-avc", avc_target_tag=f"{name}-voltage-target",
         iec104=RtuQualityIec104(rtu, name), connections={},
-        master=None, sim_started=False, agc_calculation=agc_calculation or with_avc,
+        master=None, sim_started=False, agc_calculation=agc_calculation or with_avc, agc_delta=agc_delta,
     )
     run_steps(request, LOGIN, context)
     with track_fixture_step(request, SITE_CONNECT):
@@ -398,7 +495,7 @@ def _run(request, checks, *, with_avc=False, agc_calculation=False):
         context.simulator = simulator
         failure = None
         try:
-            run_steps(request, _prepare_steps(with_avc), context)
+            run_steps(request, _prepare_steps(with_avc, agc_delta), context)
             context.master = request.getfixturevalue("master104")
             run_steps(request, (CONNECT, *checks), context)
             with track_fixture_step(request, CAPTURE):
@@ -440,6 +537,13 @@ def test_agc_running_group_saves_periods_and_restarts(request):
 def test_agc_respects_upper_calculation_and_command_periods(request):
     """AGC 按 15 秒计算并按 30 秒命令间隔下发最新目标"""
     _run(request, AGC_UPPER, agc_calculation=True)
+
+
+@pytest.mark.case_group("AGC 控制")
+@_plan(*AGC_DELTA, agc_delta=True)
+def test_agc_applies_measured_power_delta_once_per_command(request):
+    """AGC 按当前实测值换算有功差值控制"""
+    _run(request, AGC_DELTA, agc_delta=True)
 
 
 @pytest.mark.case_group("AVC 控制")

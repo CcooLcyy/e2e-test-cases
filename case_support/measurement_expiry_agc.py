@@ -77,14 +77,16 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
     def _expected_members(self):
         return self.members
 
-    def create_communication_group(self, group_name, members, *, configure_expiry=None, capacities=None, allocation=None):
+    def create_communication_group(self, group_name, members, *, configure_expiry=None, capacities=None, allocation=None,
+                                   current_measurement_delta=False):
         """为每个成员绑定独立的 RTU 连接，读回映射和总控输入 Tag。"""
         if self._draft_opened or self._save_requested or self.group is not None:
             raise RuntimeError("本例 AGC 控制组已开始创建")
-        if len(members) < 2 or len(set(members.values())) != len(members):
-            raise ValueError("本例 AGC 需要至少两个成员，且每个成员使用独立 RTU 连接")
+        if not members or len(set(members.values())) != len(members):
+            raise ValueError("本例 AGC 需要至少一个成员，且每个成员使用独立 RTU 连接")
         self.name = group_name
         self.members = dict(members)
+        self.command_mode = "增量值" if current_measurement_delta else "绝对值"
         if capacities is None:
             self.member_capacities = dict.fromkeys(self.members, self.capacity_kw)
             default_allocation = self.EQUAL_ALLOCATION
@@ -100,7 +102,7 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             raise RuntimeError(f"AGC 已存在同名控制组：{group_name}")
 
         with self.desktop.step("新增本例 AGC 控制组和成员", expected={
-            "组": group_name, "成员与 RTU 连接": self.members, "模式": f"周期分配 · {allocation} · 绝对值",
+            "组": group_name, "成员与 RTU 连接": self.members, "模式": f"周期分配 · {allocation} · {self.command_mode}",
             "成员额定容量及上限 kW": self.member_capacities, "成员下限 kW": self.minimum_kw,
             "通信心跳超时毫秒": self.COMMUNICATION_TIMEOUT_MS,
         }):
@@ -108,7 +110,9 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
             self._click(self._button("+ 新增控制组", self.LIST), "新增专用 AGC 控制组")
             self._fill_group_field(self.GROUP_DIALOG, "group_name", group_name)
             self._choose(self.GROUP_DIALOG, "control_mode", "周期分配")
-            self._choose(self.GROUP_DIALOG, "p_cmd_mode", "绝对值")
+            self._choose(self.GROUP_DIALOG, "p_cmd_mode", self.command_mode)
+            if current_measurement_delta:
+                self._choose(self.GROUP_DIALOG, "p_cmd_delta_base", "当前实测值")
             self._choose_allocation(allocation)
             self._members_tab()
             for member_name, connection_name in self.members.items():
@@ -118,17 +122,22 @@ class MeasurementExpiryAgc(AgcDirectionSetup):
         with self.desktop.step("读取已保存的 AGC 配置和实际点位"):
             overview = self._select_owned_group()
             self.desktop.check("核对 AGC 控制与分配模式", overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text,
-                               f"周期分配 · {allocation} · 绝对值")
+                               f"周期分配 · {allocation} · {self.command_mode}")
             route_error = self._visible((By.XPATH, ROUTE_ALERT))
             if route_error:
                 raise AssertionError("AGC 自动路由保存失败：" + route_error.text)
             self.group.update(self._read_point_specs())
-            self._verify_members(configure_expiry, allocation=allocation)
+            self._verify_members(configure_expiry, allocation=allocation, current_measurement_delta=current_measurement_delta)
         return dict(self.group)
 
-    def _verify_members(self, configure_expiry, *, allocation):
+    def _verify_members(self, configure_expiry, *, allocation, current_measurement_delta):
         self._click(self._button("编辑", self.OVERVIEW), "重新打开 AGC 控制组读取已保存映射")
         self._draft_opened = True
+        if current_measurement_delta:
+            base = (By.XPATH, self.GROUP_DIALOG + "//input[@id='p_cmd_delta_base']"
+                    "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][1]"
+                    "//*[@title='当前实测值']")
+            self._until(lambda _: self._visible(base), "AGC 总控增量基准未保存为当前实测值")
         self._members_tab()
         cards = self.driver.find_elements(By.XPATH, self.GROUP_DIALOG + self.MEMBER_CARD)
         self.desktop.check("核对本例 AGC 成员", sorted(card.get_attribute("aria-label") for card in cards),
