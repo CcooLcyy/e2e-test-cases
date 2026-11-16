@@ -15,6 +15,7 @@ from testbench.master104_commands import Master104CommandSender
 from testbench.workspace import local_config
 
 from .agc_direction_iec104 import AgcDirectionIec104
+from .agc_direction_page import _timestamp
 from .avc_period_page import AvcPeriodPage
 from .login_plan import login_steps
 from .measurement_expiry_agc import MeasurementExpiryAgc
@@ -169,11 +170,47 @@ def _expect_writes(context, expected, *, after, before=None, previous=None):
     return _await(context, match, f"slaveSim 未收到预期写请求及应答：{expected}")
 
 
+def _read_baseline_sample(context):
+    slow = context.slow
+    sample = _await(context, lambda reads, _: reads[slow][-1] if reads[slow] else None,
+                    "慢轮询链路尚无成功采样")
+    assert sample[2] == context.points[slow][0]["value"], sample
+    return sample
+
+
+def _prepare_agc_observation(context):
+    slow, fast = context.slow, context.fast
+    sample = context.sample = _read_baseline_sample(context)
+    expires = sample[1] + context.expiry_delta
+    status = {}
+    context.desktop.metadata["量测有效期内成员通信状态"] = status
+
+    def check_window(reads):
+        assert reads[slow][-1][0] == sample[0], "慢轮询已产生新样本，首个量测窗口已结束"
+        assert reads[fast] and reads[fast][-1][1] < expires, f"AGC 点值未在量测有效期内就绪：{status!r}"
+
+    def ready(reads, _):
+        check_window(reads)
+        status.update(context.group.read_member_communication(slow))
+        if status["condition"] == "等待通信状态":
+            return False
+        assert status["condition"] == "通信正常", f"量测有效期内成员通信异常：{status!r}"
+        if status["quality"] == "未知" or status["timestamp"] in ("", "未知"):
+            return False
+        assert status["quality"] == "有效", f"成员通信状态点品质异常：{status!r}"
+        _timestamp(status["timestamp"])
+        current_reads, _ = _protocol(context)
+        check_window(current_reads)
+        return True
+
+    with context.desktop.step("等待 AGC 成员通信点值就绪", expected="通信正常，品质有效，点值时间可读", actual=status):
+        _await(context, ready, "AGC 成员通信点值未在量测有效期内就绪", timeout=EXPIRY)
+
+
 def _baseline(context):
     slow, fast = context.slow, context.fast
-    context.sample = _await(context, lambda reads, _: reads[slow][-1] if reads[slow] else None,
-                            "慢轮询链路尚无成功采样")
-    assert context.sample[2] == context.points[slow][0]["value"], context.sample
+    if context.module == "AVC":
+        context.sample = _read_baseline_sample(context)
     marker = len(context.simulator.events()) - 1
     context.sender.send_target_kw(80 if context.module == "AGC" else 230, timeout=EXPIRY)
     expires = context.sample[1] + context.expiry_delta
@@ -268,7 +305,10 @@ CONNECT = Step("expiry.connect", "连接主站并启动控制组和慢轮询", "
 def _checks(module):
     expired = "A 无写入，B 收到 100 kW" if module == "AGC" else "无功实测更新为 10 kvar，成员无写入"
     restored = "保持原目标，两台各收到 50 kW" if module == "AGC" else "保持 230 V 目标，成员自动收到 30 kvar"
+    observation = (Step("expiry.agc.ready", "打开 AGC 成员详情并等待通信点值", "首个量测有效期内通信正常、品质有效且有点值时间",
+                        _prepare_agc_observation),) if module == "AGC" else ()
     return (
+        *observation,
         Step("expiry.baseline", "在量测有效期内验证正常下发", "成员收到基线设定并应答", _baseline),
         Step("expiry.expired", "在通信在线时观察量测过期后的下发", expired, _expired),
         Step("expiry.recovery", "等待下一笔有效量测并核对恢复下发", restored, _recovery),
