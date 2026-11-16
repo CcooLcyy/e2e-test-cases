@@ -128,10 +128,10 @@ def _record_interval(context, role, first, second, minimum):
         assert interval >= minimum, f"{role.upper()} 两条成员命令间隔 {interval} 秒，小于 {minimum} 秒"
 
 
-def _first_agc(context):
+def _first_agc(context, *, seconds=10):
     after = len(context.simulator.events()) - 1
     context.first_agc_input = _send(context, context.agc_ioa, 40)
-    context.first_agc = _wait_command(context, "agc", 40, after, seconds=10)
+    context.first_agc = _wait_command(context, "agc", 40, after, seconds=seconds)
 
 
 def _burst_agc(context):
@@ -145,7 +145,7 @@ def _verify_agc_burst(context):
     _record_interval(context, "agc", context.first_agc, second, 4)
 
 
-def _save_agc_periods_while_running(context):
+def _save_agc_periods_while_running(context, *, calculation=3, command=7):
     group = context.agc
     group._control_view("控制策略")
     group._select_owned_group()
@@ -154,8 +154,8 @@ def _save_agc_periods_while_running(context):
     restart_notice = (By.XPATH, group.GROUP_DIALOG + "//*[normalize-space(.)="
                       "'控制组正在运行：保存时会先停止控制组，保存后恢复运行。']")
     group._until(lambda _: group._visible(restart_notice), "AGC 未显示保存会停止并恢复运行的提示")
-    group._fill_group_field(group.GROUP_DIALOG, "calculation_execution_period_seconds", 3)
-    group._fill_group_field(group.GROUP_DIALOG, "command_control_period_seconds", 7)
+    group._fill_group_field(group.GROUP_DIALOG, "calculation_execution_period_seconds", calculation)
+    group._fill_group_field(group.GROUP_DIALOG, "command_control_period_seconds", command)
     conn_id = group.group["conn_id"]
     group._submit_group("保存周期并由上位机恢复运行")
     group._until(
@@ -167,7 +167,8 @@ def _save_agc_periods_while_running(context):
     details = group._until(lambda _: group._visible(group.DETAILS), "AGC 配置与点位详情未显示")
     if details.get_attribute("aria-expanded") != "true":
         group._click(group.DETAILS, "展开本例 AGC 配置与点位详情")
-    assert group._description(group._selected_overview(), "控制周期") == "计算 3 秒 / 命令 7 秒"
+    actual = group._description(group._selected_overview(), "控制周期")
+    context.desktop.check("读回 AGC 控制周期", actual, f"计算 {calculation} 秒 / 命令 {command} 秒")
 
 
 def _verify_saved_agc_periods(context):
@@ -185,13 +186,35 @@ def _calculation_interval(previous, current):
     return (datetime.fromisoformat(current["at"]) - datetime.fromisoformat(previous["at"])).total_seconds()
 
 
-def _agc_calculations(context, command, first_value, count):
+def _agc_calculations(context, command, first_value, count, *, seconds=12):
     samples = wait_calculations(
         context.master, 1, context.agc_calculation_ioa, command["sent_frame_id"], count,
-        max(context.timeout, 12), first_value=first_value,
+        max(context.timeout, seconds), first_value=first_value,
     )
     context.master.metadata["AGC计算遥测"] = context.master.metadata.pop("AVC计算遥测")
     return samples
+
+
+def _send_agc_upper_targets(context):
+    first = _agc_calculations(context, context.first_agc_input, 40, 1, seconds=25)[0]
+    # 较下一轮计算提前提交两个目标；后续遥测须证明第二轮实际采用最新目标。
+    send_burst(context.master, 1, context.agc_ioa, (55, 70), first["received_ms"] + 10000)
+
+
+def _verify_agc_upper_calculations(context):
+    samples = _agc_calculations(context, context.first_agc_input, 40, 3, seconds=55)
+    assert [Decimal(sample["value"]) for sample in samples] == [40, 70, 70], samples
+    intervals = [_calculation_interval(previous, current) for previous, current in zip(samples, samples[1:])]
+    with context.desktop.step("核对 AGC 两段计算时标间隔", expected="每段至少 15 秒、少于 18 秒", actual=intervals):
+        assert all(15 <= interval < 18 for interval in intervals), (
+            f"AGC 未按 15 秒计算周期发布结果：间隔={intervals!r}，遥测={samples!r}"
+        )
+
+
+def _verify_agc_upper_commands(context):
+    # 检查首发之后的第一条实际写请求，过早写入和被覆盖的中间目标都会被发现。
+    second = _wait_command(context, "agc", 70, context.first_agc["index"], seconds=55)
+    _record_interval(context, "agc", context.first_agc, second, 30)
 
 
 def _avc_calculations(context, count, seconds):
@@ -261,6 +284,19 @@ RESTART = (
     FIRST_AGC,
     Step("period.agc.new-interval", "遥调 70 kW，比较两轮计算与两条实际写入",
          "相邻计算约 3 秒，实际写入间隔至少 7 秒", _verify_saved_agc_periods),
+)
+AGC_UPPER = (
+    Step("period.agc.upper-config", "保存 AGC 的 15 秒计算周期和 30 秒命令最小间隔",
+         "周期分配控制组自动恢复运行，回读计算 15 秒 / 命令 30 秒",
+         lambda context: _save_agc_periods_while_running(context, calculation=15, command=30)),
+    Step("period.agc.upper-first", "通过 IEC104 遥调总有功 40 kW 并记录首条实际写入",
+         "成员收到 40 kW 写请求并应答", lambda context: _first_agc(context, seconds=30)),
+    Step("period.agc.upper-inputs", "首轮计算后连续遥调 55、70 kW",
+         "两条遥调在首轮计算遥测接收后 10 秒内完成协议确认和终止", _send_agc_upper_targets),
+    Step("period.agc.upper-calculations", "按计算结果的 CP56 时标核对相邻三轮",
+         "三轮结果是 40、70、70 kW；相邻计算时标间隔至少 15 秒、少于 18 秒", _verify_agc_upper_calculations),
+    Step("period.agc.upper-commands", "核对 RTU 首发后的第一条成员命令",
+         "实际写入最新目标 70 kW 并应答，与首条命令至少相隔 30 秒", _verify_agc_upper_commands),
 )
 PARALLEL = (
     FIRST_AGC,
@@ -397,6 +433,13 @@ def test_agc_burst_respects_command_interval_and_uses_latest_target(request):
 def test_agc_running_group_saves_periods_and_restarts(request):
     """运行中的 AGC 保存周期后自动重启并使用新周期"""
     _run(request, RESTART, agc_calculation=True)
+
+
+@pytest.mark.case_group("AGC 控制")
+@_plan(*AGC_UPPER)
+def test_agc_respects_upper_calculation_and_command_periods(request):
+    """AGC 按 15 秒计算并按 30 秒命令间隔下发最新目标"""
+    _run(request, AGC_UPPER, agc_calculation=True)
 
 
 @pytest.mark.case_group("AVC 控制")

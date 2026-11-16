@@ -58,7 +58,9 @@
         "tests/test_agc_multimember_blocks.py::test_agc_forwards_only_selected_increase_block",
         "tests/test_agc_external_direction_block.py::test_agc_only_bound_increase_block_restricts_member",
         "tests/test_control_member_maintenance.py::test_agc_member_maintenance_excludes_both_directions_until_cleared",
-        "tests/test_control_realtime_headroom.py::test_agc_distributes_by_realtime_headroom_after_member_loss"
+        "tests/test_control_realtime_headroom.py::test_agc_distributes_by_realtime_headroom_after_member_loss",
+        "tests/test_control_period_boundaries.py::test_agc_respects_upper_calculation_and_command_periods",
+        "tests/test_control_period_validation.py::test_agc_rejects_out_of_range_control_periods"
       ]
     },
     {
@@ -79,7 +81,8 @@
         "tests/test_avc_direction_blocks.py::test_avc_forwards_only_selected_increase_block",
         "tests/test_avc_external_direction_block.py::test_avc_only_bound_increase_block_restricts_member",
         "tests/test_control_member_maintenance.py::test_avc_member_maintenance_excludes_both_directions_until_cleared",
-        "tests/test_control_realtime_headroom.py::test_avc_distributes_by_realtime_headroom_after_member_loss"
+        "tests/test_control_realtime_headroom.py::test_avc_distributes_by_realtime_headroom_after_member_loss",
+        "tests/test_control_period_validation.py::test_avc_rejects_out_of_range_control_periods"
       ]
     }
   ]
