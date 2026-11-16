@@ -31,7 +31,8 @@
         "tests/test_modbus_rtu.py::test_rtu_scale_and_offset_match_fixed_expectations",
         "tests/test_modbus_rtu.py::test_rtu_two_stations_do_not_cross_values",
         "tests/test_huawei_fleet.py::test_huawei_six_buses_21_devices_match",
-        "tests/test_modbus_rtu_104_quality.py::test_rtu_quality_reaches_iec104_with_unchanged_value"
+        "tests/test_modbus_rtu_104_quality.py::test_rtu_quality_reaches_iec104_with_unchanged_value",
+        "tests/test_modbus_rtu_write_scaling.py::test_rtu_write_reverses_scale_and_offset_from_iec104"
       ]
     },
     {
@@ -55,7 +56,8 @@
         "tests/test_agc_multimember_blocks.py::test_agc_partial_lower_limit_redistributes_without_group_block",
         "tests/test_agc_external_direction_block.py::test_agc_optional_external_direction_block_redistributes_members",
         "tests/test_agc_multimember_blocks.py::test_agc_forwards_only_selected_increase_block",
-        "tests/test_agc_external_direction_block.py::test_agc_only_bound_increase_block_restricts_member"
+        "tests/test_agc_external_direction_block.py::test_agc_only_bound_increase_block_restricts_member",
+        "tests/test_control_member_maintenance.py::test_agc_member_maintenance_excludes_both_directions_until_cleared"
       ]
     },
     {
@@ -74,7 +76,8 @@
         "tests/test_avc_direction_blocks.py::test_avc_reports_direction_blocks_when_all_members_reach_limits",
         "tests/test_avc_external_direction_block.py::test_avc_external_member_direction_block_redistributes_and_recovers",
         "tests/test_avc_direction_blocks.py::test_avc_forwards_only_selected_increase_block",
-        "tests/test_avc_external_direction_block.py::test_avc_only_bound_increase_block_restricts_member"
+        "tests/test_avc_external_direction_block.py::test_avc_only_bound_increase_block_restricts_member",
+        "tests/test_control_member_maintenance.py::test_avc_member_maintenance_excludes_both_directions_until_cleared"
       ]
     }
   ]
