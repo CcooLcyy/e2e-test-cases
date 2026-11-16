@@ -234,7 +234,7 @@ def _save_agc_periods_while_running(context, *, calculation=3, command=7):
     group._select_owned_group()
     group._draft_opened = True
     group._click(group._button("编辑", group.OVERVIEW), "编辑运行中的本例 AGC 控制组")
-    restart_notice = (By.XPATH, group.GROUP_DIALOG + "//*[normalize-space(.)="
+    restart_notice = (By.XPATH, group.GROUP_DIALOG + "//*[@role='alert' and normalize-space(.)="
                       "'控制组正在运行：保存时会先停止控制组，保存后恢复运行。']")
     group._until(lambda _: group._visible(restart_notice), "AGC 未显示保存会停止并恢复运行的提示")
     group._fill_group_field(group.GROUP_DIALOG, "calculation_execution_period_seconds", calculation)
@@ -438,9 +438,14 @@ def _cleanup_upper(context):
     context.rtu._cleaning = True
     errors = []
     try:
-        cleanup = [("IEC104", context.iec104.cleanup), ("AGC", context.agc.cleanup), ("RTU", context.rtu.cleanup)]
+        cleanup = [
+            ("AGC 编辑弹窗", context.agc.discard_open_draft),
+            ("IEC104", context.iec104.cleanup),
+            ("AGC", context.agc.cleanup),
+        ]
         if context.avc is not None:
-            cleanup.insert(2, ("AVC", context.avc.cleanup))
+            cleanup.append(("AVC", context.avc.cleanup))
+        cleanup.append(("RTU", context.rtu.cleanup))
         for label, action in cleanup:
             try:
                 action()

@@ -236,17 +236,27 @@ class AgcDirectionSetup(AgcDirectionPage):
         title = "放弃未完成的成员编辑？" if dialog == self.MEMBER_DIALOG else "放弃未保存的控制组草稿？"
         self._close_control_draft(dialog, button, title, "放弃草稿")
 
+    def discard_open_draft(self):
+        if not self._draft_opened:
+            return
+        was_cleaning = self._cleaning
+        self._cleaning = True
+        try:
+            with self.desktop.step("关闭本例 AGC 编辑弹窗", cancellable=False):
+                self._wait_group_save_idle(self.GROUP_DIALOG)
+                self._close_draft(self.MEMBER_DIALOG, "取消编辑")
+                self._close_draft(self.GROUP_DIALOG, "取消")
+                self._draft_opened = False
+        finally:
+            self._cleaning = was_cleaning
+
     def cleanup(self):
         if not self._draft_opened and not self._save_requested:
             return
         self._cleaning = True
         try:
             with self.desktop.step(f"清理本例 AGC 控制组 {self.name}", cancellable=False):
-                if self._draft_opened:
-                    self._wait_group_save_idle(self.GROUP_DIALOG)
-                    self._close_draft(self.MEMBER_DIALOG, "取消编辑")
-                    self._close_draft(self.GROUP_DIALOG, "取消")
-                    self._draft_opened = False
+                self.discard_open_draft()
                 if not self._save_requested:
                     return
                 self._control_view("控制策略")
