@@ -64,7 +64,8 @@
         "tests/test_control_period_boundaries.py::test_agc_applies_measured_power_delta_once_per_command",
         "tests/test_agc_step_limit.py::test_agc_event_steps_up_and_down_without_new_inputs",
         "tests/test_agc_step_limit.py::test_agc_event_reverses_ramp_from_last_written_target",
-        "tests/test_agc_step_limit.py::test_agc_cyclic_shares_step_width_and_uses_command_period"
+        "tests/test_agc_step_limit.py::test_agc_cyclic_shares_step_width_and_uses_command_period",
+        "tests/test_control_remote_local.py::test_agc_switches_remote_local_in_control_strategy"
       ]
     },
     {
@@ -86,7 +87,8 @@
         "tests/test_avc_external_direction_block.py::test_avc_only_bound_increase_block_restricts_member",
         "tests/test_control_member_maintenance.py::test_avc_member_maintenance_excludes_both_directions_until_cleared",
         "tests/test_control_realtime_headroom.py::test_avc_distributes_by_realtime_headroom_after_member_loss",
-        "tests/test_control_period_validation.py::test_avc_rejects_out_of_range_control_periods"
+        "tests/test_control_period_validation.py::test_avc_rejects_out_of_range_control_periods",
+        "tests/test_control_remote_local.py::test_avc_switches_remote_local_in_control_strategy"
       ]
     },
     {
