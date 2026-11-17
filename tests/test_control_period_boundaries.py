@@ -32,6 +32,7 @@ pytestmark = pytest.mark.requires_modbus
 MEASUREMENT_TAGS = {"agc": "active-power", "avc": "reactive-power", "voltage": "bus-voltage"}
 SETPOINT = "setpoint"
 DELTA_MEMBER = "active-member"
+RESTART_BATCH_WINDOW_MS = 100
 
 
 def _prepare_simulator(context):
@@ -83,9 +84,9 @@ def _prepare_avc(context):
     )
 
 
-def _prepare_iec104(context):
+def _prepare_iec104(context, *, batch_window_ms=None):
     page = context.iec104
-    page.create()
+    page.create(batch_window_ms=batch_window_ms)
     context.agc_ioa = page.import_point(
         context.name, context.agc_target_tag, f"{context.name}-104-p", module="AGC", business_type="遥调",
     )
@@ -256,6 +257,7 @@ def _save_agc_periods_while_running(context, *, calculation=3, command=7):
 
 def _verify_saved_agc_periods(context):
     first = _agc_calculations(context, context.first_agc_input, 40, 1)[0]
+    # 缩短首轮遥测的上送延迟，给下一轮计算前发送新目标留出时间。
     send_burst(context.master, 1, context.agc_ioa, (70,), first["received_ms"] + 2500)
     samples = _agc_calculations(context, context.first_agc_input, 40, 2)
     interval = _calculation_interval(samples[0], samples[1])
@@ -356,6 +358,11 @@ PREPARE_DELTA_AGC = Step("period.agc.delta-config", "建立按当前实测换算
                          "周期分配；总控输入为增量，单台 RTU 成员绑定通信点并接收绝对设定",
                          _prepare_delta_agc)
 PREPARE_104 = Step("period.104", "建立本例 IEC104 点表和路由", "保存、读回本例点号并启动被控站", _prepare_iec104)
+PREPARE_104_RESTART = Step(
+    "period.104", "建立本例 IEC104 链路、点表和路由",
+    f"读回本例链路批量窗口 {RESTART_BATCH_WINDOW_MS} ms，核对点号和路由并启动被控站",
+    lambda context: _prepare_iec104(context, batch_window_ms=RESTART_BATCH_WINDOW_MS),
+)
 CONNECT = Step("period.connect", "连接专用 IEC104 主站并启动本例控制组", "主站与本例控制组已运行", _connect)
 FIRST_AGC = Step("period.agc.first", "遥调总有功 40 kW", "AGC 成员收到 40 kW 写入并应答", _first_agc)
 BURST = (
@@ -369,7 +376,7 @@ RESTART = (
          "出现停组后恢复运行的提示，保存后同一控制组自动恢复并显示新周期", _save_agc_periods_while_running),
     FIRST_AGC,
     Step("period.agc.new-interval", "遥调 70 kW，比较两轮计算与两条实际写入",
-         "相邻计算约 3 秒，实际写入间隔至少 7 秒", _verify_saved_agc_periods),
+         "相邻两轮分别计算出 40、70 kW，间隔约 3 秒，实际写入间隔至少 7 秒", _verify_saved_agc_periods),
 )
 AGC_UPPER = (
     Step("period.agc.upper-config", "保存 AGC 的 15 秒计算周期和 30 秒命令最小间隔",
@@ -405,14 +412,14 @@ PARALLEL = (
 CAPTURE = Step("period.capture", "保存主站协议记录", "本例 IEC104 原始报文已记录")
 
 
-def _prepare_steps(with_avc, agc_delta):
+def _prepare_steps(with_avc, agc_delta, prepare_104):
     if agc_delta:
-        return (*PREPARE[:2], PREPARE_DELTA_AGC, PREPARE_104)
-    return (*PREPARE, PREPARE_AVC, PREPARE_104) if with_avc else (*PREPARE, PREPARE_104)
+        return (*PREPARE[:2], PREPARE_DELTA_AGC, prepare_104)
+    return (*PREPARE, PREPARE_AVC, prepare_104) if with_avc else (*PREPARE, prepare_104)
 
 
-def _plan(*checks, with_avc=False, agc_delta=False):
-    prepare = _prepare_steps(with_avc, agc_delta)
+def _plan(*checks, with_avc=False, agc_delta=False, prepare_104=PREPARE_104):
+    prepare = _prepare_steps(with_avc, agc_delta, prepare_104)
     plan = case_plan(
         ENVIRONMENT, SLAVESIM_BROWSER_READY, DESKTOP_START, *LOGIN, SITE_CONNECT, SIM_START, *prepare,
         MASTER104_START, CONNECT, *checks, CAPTURE, UPPER_CLEANUP, SIM_CLEANUP,
@@ -476,7 +483,7 @@ def _cleanup(request, context, failure):
                 failure.add_note(f"模拟总线清理失败：{error}")
 
 
-def _run(request, checks, *, with_avc=False, agc_calculation=False, agc_delta=False):
+def _run(request, checks, *, with_avc=False, agc_calculation=False, agc_delta=False, prepare_104=PREPARE_104):
     with track_fixture_step(request, ENVIRONMENT):
         url, timeout = _environment()
     with track_fixture_step(request, SLAVESIM_BROWSER_READY):
@@ -500,7 +507,7 @@ def _run(request, checks, *, with_avc=False, agc_calculation=False, agc_delta=Fa
         context.simulator = simulator
         failure = None
         try:
-            run_steps(request, _prepare_steps(with_avc, agc_delta), context)
+            run_steps(request, _prepare_steps(with_avc, agc_delta, prepare_104), context)
             context.master = request.getfixturevalue("master104")
             run_steps(request, (CONNECT, *checks), context)
             with track_fixture_step(request, CAPTURE):
@@ -531,10 +538,10 @@ def test_agc_burst_respects_command_interval_and_uses_latest_target(request):
 
 
 @pytest.mark.case_group("AGC 控制")
-@_plan(*RESTART)
+@_plan(*RESTART, prepare_104=PREPARE_104_RESTART)
 def test_agc_running_group_saves_periods_and_restarts(request):
     """运行中的 AGC 保存周期后自动重启并使用新周期"""
-    _run(request, RESTART, agc_calculation=True)
+    _run(request, RESTART, agc_calculation=True, prepare_104=PREPARE_104_RESTART)
 
 
 @pytest.mark.case_group("AGC 控制")

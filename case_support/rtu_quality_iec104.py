@@ -73,7 +73,15 @@ class RtuQualityIec104:
             raise RuntimeError(f"IEC104 链路 {self.name} 创建发生冲突：{self.creation_conflict}")
         return not self.upper._visible((By.XPATH, self.LINK_DIALOG))
 
-    def create(self):
+    def _check_batch_window(self, expected_ms):
+        self._button("编辑配置", self.CARD, "重新读取本例 IEC104 链路配置")
+        actual = self._field("point_batch_window_ms").get_property("value")
+        self._button("取消", self.LINK_DIALOG, "关闭 IEC104 配置核对窗口")
+        self.upper._until(lambda _: not self.upper._visible((By.XPATH, self.LINK_DIALOG)),
+                          "IEC104 配置核对窗口仍然打开")
+        self.upper.desktop.check("读回 IEC104 批量窗口 (ms)", actual, str(expected_ms))
+
+    def create(self, *, batch_window_ms=None):
         self._open()
         self.upper._refresh_connection_list("IEC104", "iec104-page-alert")
         if self.upper.driver.find_elements(*self.upper._connection_locator(self.name)):
@@ -94,6 +102,8 @@ class RtuQualityIec104:
         local_ip = self._field("local_ip").get_attribute("value").strip()
         self.endpoint = f"{local_ip}:{self.port}"
         self.originator_address = self._field("oa").get_attribute("value").strip()
+        if batch_window_ms is not None:
+            self._fill("point_batch_window_ms", batch_window_ms)
         time_switch = (By.XPATH, self.LINK_DIALOG + "//button[@id='point_with_time']")
         self.upper._click(time_switch, "启用 IEC104 带时标上送")
         self.upper._until(lambda _: self.upper._visible(time_switch).get_attribute("aria-checked") == "true", "带时标选项未启用")
@@ -104,6 +114,8 @@ class RtuQualityIec104:
             self._select_link(self.name)
             self._assert_link()
             self.confirmed = True
+        if batch_window_ms is not None:
+            self._check_batch_window(batch_window_ms)
         return self.port
 
     def _choose(self, placeholder, query, text):
