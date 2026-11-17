@@ -28,7 +28,7 @@ class AgcDirectionSetup(AgcDirectionPage):
         element = self._until(lambda _: self._visible(locator), f"AGC 字段未显示：{field}")
         self._replace(element, value)
 
-    def _choose(self, dialog, field, label, *, search=None, accessible_name=False):
+    def _choose(self, dialog, field, label, *, search=None, accessible_name=False, allow_label_prefix=False):
         attribute = "aria-label" if accessible_name else "id"
         select = dialog + f"//input[@{attribute}=" + xpath_text(field) + "]"
         control = select + "/ancestor::div[contains(concat(' ',normalize-space(@class),' '),' ant-select ')][1]"
@@ -48,9 +48,14 @@ class AgcDirectionSetup(AgcDirectionPage):
         field_input, list_id = self._until(open_list, f"AGC 下拉框未打开：{field}")
         if search is not None:
             field_input.send_keys(search)
+        title_match = "@title=" + xpath_text(label)
+        if allow_label_prefix:
+            suffix = xpath_text(" " + label)
+            title_match = (f"({title_match} or substring(normalize-space(@title), "
+                           f"string-length(normalize-space(@title)) - string-length({suffix}) + 1) = {suffix})")
         option = (By.XPATH, "//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-dropdown ') and .//*[@id="
                   + xpath_text(list_id) + "]]//div[contains(concat(' ',normalize-space(@class),' '),' ant-select-item-option ')"
-                  " and not(contains(@class,'ant-select-item-option-disabled')) and @title=" + xpath_text(label) + "]")
+                  " and not(contains(@class,'ant-select-item-option-disabled')) and " + title_match + "]")
         self._click(option, f"选择 {label}")
 
     def _record_group(self, item):

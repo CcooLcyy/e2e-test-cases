@@ -33,7 +33,7 @@ class AgcStepLimit:
 
     def __post_init__(self):
         if (self.up_seconds is None) != (self.down_seconds is None):
-            raise ValueError("PI 事件触发须同时提供升、降功率下发间隔")
+            raise ValueError("事件触发须同时提供升、降功率下发间隔")
         if not self.sync_width and self.down_kw is None:
             raise ValueError("未同步升降幅度时须提供单次最大降功率调整量")
         if self.sync_width and self.down_kw is not None and self.up_kw != self.down_kw:
@@ -118,7 +118,7 @@ def _check_hidden_fields(page, dialog, name, *patterns):
 def configure_step_limit(page, dialog, settings, *, verify=False):
     """Use the open AGC group editor; verify=True only reads the reopened draft."""
     title = dialog + f"//*[normalize-space(text())='{_TITLE}']"
-    mode = "周期分配" if settings.up_seconds is None else "PI 事件触发"
+    mode = "周期分配" if settings.up_seconds is None else "事件触发"
     action = "读回" if verify else "配置"
     with page.desktop.step(f"{action} AGC {mode}的{_TITLE}", expected="通过组级配置界面核对升降幅度和间隔"):
         page._until(lambda driver: any(element.is_displayed() for element in driver.find_elements(By.XPATH, title)),

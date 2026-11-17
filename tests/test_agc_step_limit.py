@@ -52,17 +52,18 @@ def _prepare_group(context):
     context.target_tag = saved["command_tag"]
     _open_group_editor(page)
     if settings.up_seconds is not None:
-        page._choose(page.GROUP_DIALOG, "control_mode", "PI 事件触发")
+        page._choose(page.GROUP_DIALOG, "control_mode", "事件触发", allow_label_prefix=True)
     else:
         # 计算仍是每 1 秒；预期下发取命令控制周期，不能按计算周期每轮都发。
         page._fill_group_field(page.GROUP_DIALOG, "command_control_period_seconds", COMMAND_PERIOD)
     configure_step_limit(page, page.GROUP_DIALOG, settings)
     page._submit_group("保存本例 AGC 分步限幅参数")
     overview = page._select_owned_group()
-    mode = "周期分配" if settings.up_seconds is None else "PI 事件触发"
-    actual = overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text
+    mode = "周期分配" if settings.up_seconds is None else "事件触发"
+    actual = overview.find_element(By.CSS_SELECTOR, ".agc-runtime-context").text.split("·", 1)[0].strip()
     with page.desktop.step("核对已保存的控制方式", expected=mode, actual=actual):
-        assert mode in actual, f"保存后控制方式应为 {mode}，实际为 {actual}"
+        legacy_label = mode == "事件触发" and actual.endswith(" " + mode)
+        assert actual == mode or legacy_label, f"保存后控制方式应为 {mode}，实际为 {actual}"
     if settings.up_seconds is None:
         page.desktop.check("核对 AGC 周期配置", page._description(overview, "控制周期"),
                            f"计算 1 秒 / 命令 {COMMAND_PERIOD} 秒")
