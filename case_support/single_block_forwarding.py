@@ -1,5 +1,7 @@
 """验证专用 IEC104 链路仅转发明确选择的闭锁方向。"""
 
+import re
+
 from selenium.webdriver.common.by import By
 
 from testbench.case_plan import Step
@@ -40,10 +42,30 @@ def prepare_single_block_forwarding(context):
     page._open()
     page._select_link(page.name)
     page._assert_link()
-    page.upper._replace(page._point_search(), "")
-    table = (By.XPATH, page.POINT_CARD + "//tbody/tr[@data-row-key]")
-    names = [row.get_attribute("data-row-key") for row in page.upper.driver.find_elements(*table) if row.is_displayed()]
-    context.desktop.check("读回专用点表的全部点", sorted(names), sorted(saved))
+    search = page._point_search()
+    page.upper._until(lambda _: search.is_enabled(), "专用 IEC104 点表搜索框尚未可用")
+    page.upper._replace(search, "")
+
+    count_label = (By.XPATH, page.POINT_CARD + "//span[starts-with(normalize-space(.), '显示 ')"
+                   " and contains(normalize-space(.), ' 个点位')]")
+
+    def unfiltered_count(_):
+        label = page.upper._visible(count_label)
+        counts = re.fullmatch(r"显示\s+(\d+)/(\d+)\s+个点位", label.text.strip()) if label else None
+        if counts and counts[1] == counts[2]:
+            return int(counts[2]) or None
+
+    # 先核对界面显示的总数，以发现虚拟表格视口之外的多余点位。
+    total = page.upper._until(unfiltered_count, "专用 IEC104 点表未显示清空筛选后的点位总数")
+    context.desktop.check("读回专用点表的点位总数", total, len(saved))
+    rows = (By.XPATH, page.POINT_CARD + "//*[@data-row-key]")
+
+    def rendered_names(driver):
+        names = [row.get_attribute("data-row-key") for row in driver.find_elements(*rows) if row.is_displayed()]
+        return sorted(names) if len(names) == total else None
+
+    names = page.upper._until(rendered_names, f"专用 IEC104 点表未渲染全部 {total} 个点位")
+    context.desktop.check("读回专用点表的全部点", names, sorted(saved))
     context.desktop.metadata["本例仅转发增闭锁的点表与路由"] = {"点表": saved, "路由": routes}
     page.start()
     context.target_ioa, context.increase_ioa = saved[command], saved[selected]
