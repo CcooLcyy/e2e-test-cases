@@ -245,10 +245,15 @@ class SlaveSimPage:
                 return {name: f['总线名称'], link: f['串口软链接路径'], slaves:
                     Array.from(bus.querySelectorAll(':scope > details.slave-editor'), slave => {
                         const sf = fields(slave.querySelector(':scope > .config-grid'));
-                        const model = slave.querySelector(':scope > .model-editor');
+                        // 无功电压联动区也使用 model-editor，未启用时仍保留隐藏节点。
+                        const qVoltage = slave.querySelector(':scope > label.config-toggle > input[name="q_voltage_enabled"]');
+                        const qVoltageEditor = qVoltage?.parentElement.nextElementSibling;
+                        const model = Array.from(slave.querySelectorAll(':scope > .model-editor'))
+                            .find(editor => editor !== qVoltageEditor);
                         return {station_id: Number(sf['站号（1～247）']), fields: sf,
-                            model: model ? (model.textContent.includes('当前页面不支持模型') ? '未知模型' : 'huawei_v3') : '',
-                            model_fields: model ? fields(model) : {},
+                            model: model ? (model.textContent.includes('当前页面不支持模型') ? '未知模型' : 'huawei_v3')
+                                : (qVoltage?.checked ? 'q_voltage' : ''),
+                            model_fields: model ? fields(model) : (qVoltage?.checked ? fields(qVoltageEditor) : {}),
                             registers: Array.from(slave.querySelectorAll(':scope > details.register-group > details.register-editor'), reg => {
                                 const rf = fields(reg);
                                 return {function: rf['功能码'], address: Number(rf['协议地址']), type: rf['数据类型'],
