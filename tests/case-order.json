@@ -92,7 +92,10 @@
     {
       "name": "IEC104",
       "cases": [
-        "tests/test_iec104_simulation_raw_value.py::test_iec104_simulation_uploads_entered_values_without_scaling"
+        "tests/test_iec104_simulation_raw_value.py::test_iec104_simulation_uploads_entered_values_without_scaling",
+        "tests/test_iec104_batch_ioa_category.py::test_iec104_batch_ioa_category_and_business_type",
+        "tests/test_iec104_batch_fixed_reporting.py::test_iec104_batch_fixed_reporting_and_type_switch",
+        "tests/test_iec104_batch_ioa_capacity.py::test_iec104_batch_ioa_rejects_insufficient_capacity"
       ]
     }
   ]
